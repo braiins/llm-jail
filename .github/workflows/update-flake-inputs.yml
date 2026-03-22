@@ -1,0 +1,35 @@
+name: Update flake inputs
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Update claude-code-nix
+        run: nix flake update claude-code-nix
+
+      - name: Update codex-cli-nix
+        run: nix flake update codex-cli-nix
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "flake: update claude-code-nix and codex-cli-nix inputs"
+          title: "flake: update claude-code-nix and codex-cli-nix inputs"
+          body: |
+            Automated daily update of flake inputs:
+            - `claude-code-nix`
+            - `codex-cli-nix`
+          branch: auto-update-flake-inputs
+          delete-branch: true
