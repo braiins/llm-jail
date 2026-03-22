@@ -25,7 +25,10 @@
 
     boot.initrd.supportedFilesystems = [ "ext4" ];
 
-    # Create nix store overlay dirs; optionally use a virtio disk for more space
+    # Mount nix store overlay in postMountCommands so we control ordering:
+    # store-disk (ext4 or tmpfs) MUST be mounted before the overlay, and
+    # postMountCommands runs after all neededForBoot fileSystems (including
+    # /nix/.ro-store) but before switch_root.
     boot.initrd.postMountCommands = ''
       STORE_DISK=0
       for arg in $(cat /proc/cmdline); do
@@ -41,6 +44,10 @@
         mount -t tmpfs tmpfs $targetRoot/nix/.store-disk
       fi
       mkdir -p $targetRoot/nix/.store-disk/upper $targetRoot/nix/.store-disk/work
+
+      mkdir -p $targetRoot/nix/store
+      mount -t overlay overlay $targetRoot/nix/store \
+        -o "lowerdir=$targetRoot/nix/.ro-store,upperdir=$targetRoot/nix/.store-disk/upper,workdir=$targetRoot/nix/.store-disk/work"
     '';
 
     # ── Filesystems ───────────────────────────────────────────────────────
@@ -50,8 +57,7 @@
       options = [ "mode=0755" "size=2G" ];
     };
 
-    # Mount host nix store read-only as lower layer, then overlay with tmpfs upper
-    # so the guest can write new store paths (needed for nix build/develop)
+    # Host nix store read-only (lower layer for the overlay mounted above)
     fileSystems."/nix/.ro-store" = {
       device = "nix-store";
       fsType = "9p";
@@ -59,17 +65,8 @@
       neededForBoot = true;
     };
 
-    fileSystems."/nix/store" = {
-      device = "overlay";
-      fsType = "overlay";
-      options = [
-        "lowerdir=/nix/.ro-store"
-        "upperdir=/nix/.store-disk/upper"
-        "workdir=/nix/.store-disk/work"
-      ];
-      depends = [ "/nix/.ro-store" ];
-      neededForBoot = true;
-    };
+    # /nix/store overlay is mounted in postMountCommands (above) to ensure
+    # the store-disk backing device is ready before the overlay is created.
 
     fileSystems."/llmjail-env" = {
       device = "envfs";
