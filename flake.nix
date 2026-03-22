@@ -44,5 +44,13 @@
           program = "${self.packages.${system}.${name}}/bin/llm-jail-${name}";
         }) tools
       );
+
+      checks = forAllSystems (system:
+        import ./tests {
+          pkgs = nixpkgs.legacyPackages.${system};
+          claude-code = claude-code-nix.packages.${system}.default;
+          codex-cli = codex-cli-nix.packages.${system}.default;
+        }
+      );
     };
 }
