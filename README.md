@@ -194,3 +194,7 @@ No persistent disk images are involved. The guest kernel and initrd are built by
 1. Add a guest module under `guests/` (import `common.nix`, set `llmjail.toolBinary` and `llmjail.dangerousFlag`).
 2. Add an entry to `tools.nix` pointing at the new module.
 3. `nix run .#your-tool` — the flake generates a runner automatically.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
