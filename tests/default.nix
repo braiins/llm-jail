@@ -28,6 +28,7 @@ let
           "d /workspace 0755 user users -"
           "f /llmjail-env/env 0644 root root - HOME=/home/user"
           "f /llmjail-env/tool-args 0644 root root -"
+          "f /llmjail-env/allowed-domains 0644 root root -"
         ];
 
         # Tool service will fail without credentials — prevent it from
@@ -49,6 +50,7 @@ let
 
         with subtest("systemd services are defined"):
             machine.succeed("systemctl cat llmjail-mounts.service")
+            machine.succeed("systemctl cat llmjail-net-filter.service")
             machine.succeed("systemctl cat llmjail-tool.service")
 
         with subtest("mounts service handles no-mounts case"):
@@ -78,6 +80,67 @@ let
       '';
     };
 
+  netFilterTest = pkgs.testers.nixosTest {
+    name = "llmjail-net-filter-smoke";
+
+    nodes.machine = { config, lib, pkgs, ... }: {
+      imports = [ ../guests/claude.nix ];
+      _module.args = { inherit claude-code codex-cli; };
+
+      fileSystems."/nix/.ro-store" = lib.mkForce {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [ "size=1M" ];
+      };
+      fileSystems."/llmjail-env" = lib.mkForce {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [ "size=10M" ];
+      };
+      boot.initrd.postMountCommands = lib.mkForce "";
+
+      # Enable net filtering via kernel cmdline
+      boot.kernelParams = lib.mkAfter [ "llmjail.net_filter=1" ];
+
+      systemd.tmpfiles.rules = [
+        "d /workspace 0755 user users -"
+        "f /llmjail-env/env 0644 root root - HOME=/home/user"
+        "f /llmjail-env/tool-args 0644 root root -"
+        "f+ /llmjail-env/allowed-domains 0644 root root - api.anthropic.com"
+      ];
+
+      systemd.services.llmjail-tool = {
+        wantedBy = lib.mkForce [];
+        serviceConfig.ExecStopPost = lib.mkForce "";
+      };
+
+      virtualisation.memorySize = 1024;
+    };
+
+    testScript = ''
+      machine.start()
+      machine.wait_for_unit("llmjail-net-filter.service")
+
+      with subtest("dnsmasq is running"):
+          machine.succeed("pgrep dnsmasq")
+
+      with subtest("resolv.conf points to localhost"):
+          output = machine.succeed("cat /etc/resolv.conf")
+          assert "127.0.0.1" in output, f"Expected 127.0.0.1 in resolv.conf: {output}"
+
+      with subtest("nftables rules are loaded"):
+          output = machine.succeed("nft list ruleset")
+          assert "llmjail_filter" in output, f"Expected llmjail_filter in nft rules: {output}"
+
+      with subtest("dnsmasq config has allowed domain"):
+          output = machine.succeed("cat /etc/dnsmasq-llmjail.conf")
+          assert "api.anthropic.com" in output, f"Expected api.anthropic.com in dnsmasq config: {output}"
+
+      with subtest("blocked domain fails to resolve"):
+          machine.fail("getent hosts evil.example.com")
+    '';
+  };
+
 in
 {
   claude-smoke = mkSmokeTest {
@@ -91,4 +154,6 @@ in
     guestModule = ../guests/codex.nix;
     toolBinary = "${codex-cli}/bin/codex";
   };
+
+  net-filter-smoke = netFilterTest;
 }

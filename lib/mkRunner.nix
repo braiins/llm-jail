@@ -29,6 +29,8 @@ pkgs.writeShellApplication {
     DEV_ENV=0
     STORE_DISK=0
     CONFIG_DIR="''${LLMJAIL_CONFIG_DIR:-$HOME/${toolDefaults.configDirName}}"
+    NET_FILTER=1
+    EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
     TOOL_ARGS=()
 
@@ -44,6 +46,8 @@ pkgs.writeShellApplication {
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
       --dev-env             Capture nix develop environment from workspace flake
       --store-disk SIZE     Create a disk-backed nix store overlay (SIZE in GB)
+      --allow-domain DOMAIN Add domain to network whitelist (repeatable)
+      --no-net-filter       Disable network filtering (unrestricted access)
       --mem SIZE            Memory in MB (default: ${toString toolDefaults.mem})
       --vcpu COUNT          vCPUs (default: ${toString toolDefaults.vcpu})
       -h, --help            Show this help
@@ -61,6 +65,8 @@ pkgs.writeShellApplication {
         --config-dir)  CONFIG_DIR="$2"; shift 2 ;;
         --mount)       EXTRA_MOUNTS+=("$2:rw"); shift 2 ;;
         --ro-mount)    EXTRA_MOUNTS+=("$2:ro"); shift 2 ;;
+        --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
+        --no-net-filter) NET_FILTER=0; shift ;;
         --store-disk)  STORE_DISK="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
         --vcpu)        VCPU="$2"; shift 2 ;;
@@ -96,6 +102,36 @@ pkgs.writeShellApplication {
       printf '%s\0' "''${TOOL_ARGS[@]}" > "$RUNDIR/tool-args"
     else
       : > "$RUNDIR/tool-args"
+    fi
+
+    # ── Build allowed-domains file ─────────────────────────────────────
+    if [ "$NET_FILTER" = "1" ]; then
+      {
+        # Tool-specific default domains
+        ${builtins.concatStringsSep "\n    " (
+          map (d: "echo \"${d}\"") toolDefaults.allowedDomains
+        )}
+
+        # Auto-extract domains from base URL env vars
+        for var in ANTHROPIC_BASE_URL OPENAI_BASE_URL; do
+          val="''${!var:-}"
+          if [ -n "$val" ]; then
+            domain="''${val#*://}"
+            domain="''${domain%%/*}"
+            domain="''${domain%%:*}"
+            if [ -n "$domain" ]; then
+              echo "$domain"
+            fi
+          fi
+        done
+
+        # User-specified extra domains
+        for d in "''${EXTRA_DOMAINS[@]+"''${EXTRA_DOMAINS[@]}"}"; do
+          echo "$d"
+        done
+      } | sort -u > "$RUNDIR/allowed-domains"
+    else
+      : > "$RUNDIR/allowed-domains"
     fi
 
     # ── Capture nix develop environment if requested ───────────────────
@@ -188,6 +224,10 @@ pkgs.writeShellApplication {
 
     if [ "$STORE_DISK" -gt 0 ]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.store_disk=1"
+    fi
+
+    if [ "$NET_FILTER" = "1" ]; then
+      KERNEL_PARAMS="$KERNEL_PARAMS llmjail.net_filter=1"
     fi
 
     # ── Store disk image ────────────────────────────────────────────

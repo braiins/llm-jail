@@ -51,6 +51,8 @@ llm-jail-{claude,codex} [options] [-- tool-args...]
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | — |
 | `--dev-env` | Capture `nix develop` environment from workspace | off |
 | `--store-disk SIZE` | Create a disk-backed nix store overlay (SIZE in GB) | off |
+| `--allow-domain DOMAIN` | Add domain to network whitelist (repeatable) | tool defaults |
+| `--no-net-filter` | Disable network filtering (unrestricted access) | filtering on |
 | `--mem SIZE` | VM memory in MB | 4096 |
 | `--vcpu COUNT` | Number of vCPUs | 2 |
 | `-h`, `--help` | Show help | — |
@@ -83,6 +85,18 @@ Use a nix dev shell inside the VM:
 nix run .#claude -- --dev-env -- -p "Run the test suite"
 ```
 
+Allow access to additional domains (e.g. for package installs or git cloning):
+
+```bash
+nix run .#claude -- --allow-domain github.com --allow-domain registry.npmjs.org
+```
+
+Disable network filtering entirely:
+
+```bash
+nix run .#claude -- --no-net-filter
+```
+
 Run `nix build` inside the VM with extra storage (root tmpfs is only 2G):
 
 ```bash
@@ -113,25 +127,38 @@ On NixOS hosts, system packages (`/run/current-system/sw`) and user packages (`/
 
 All other host environment variables are stripped.
 
+**Network.** By default, outbound network access is restricted via DNS-based domain filtering and a port-level firewall:
+
+- DNS resolution is limited to tool-specific API domains via a local dnsmasq instance
+- Only HTTP/HTTPS traffic (ports 80/443) is allowed outbound; all other protocols are blocked by nftables
+- Custom API endpoints (via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`) are automatically whitelisted
+- Additional domains can be added with `--allow-domain` (subdomains are included automatically)
+- Use `--no-net-filter` to disable all network restrictions
+
+Default allowed domains per tool:
+
+| Tool | Domains |
+|------|---------|
+| Claude | `api.anthropic.com`, `statsig.anthropic.com`, `sentry.io` |
+| Codex | `api.openai.com`, `sentry.io` |
+
+> [!NOTE]
+> DNS-based filtering prevents the agent from resolving non-whitelisted domains, but does not prevent connections to hardcoded IP addresses on ports 80/443. This is adequate for preventing accidental or prompt-injected exfiltration by LLM agents, which use domain names rather than raw IPs.
+
 ## Dangerous mode
 
 > [!CAUTION]
-> **Dangerous mode grants the agent unrestricted network access.**
+> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--full-auto` for Codex). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
 >
-> The `--dangerous` flag tells the tool to skip its built-in permission prompts (`--dangerously-skip-permissions` for Claude, `--full-auto` for Codex). The VM provides filesystem and process isolation, but **network traffic from the guest is not filtered**. The agent can make arbitrary outbound connections — HTTP requests, DNS lookups, SSH, or anything else the QEMU user-mode network stack allows.
->
-> This means a misbehaving or prompt-injected agent could:
-> - Exfiltrate code or environment variables (including API keys) to external servers
-> - Download and execute arbitrary payloads
-> - Interact with internal network services reachable from the host
+> Network filtering remains active in dangerous mode — the agent can only reach whitelisted domains. To grant unrestricted network access, use `--no-net-filter` (this is independent of `--dangerous`).
 >
 > **Mitigations if you use dangerous mode:**
 > - Scope API keys to the minimum permissions needed
 > - Avoid mounting directories containing secrets
-> - Run on a host with restrictive outbound firewall rules
+> - Be cautious with `--allow-domain` — domains like `github.com` or `npmjs.org` are bidirectional and could be used for data exfiltration
 > - Review agent output before trusting it
 >
-> Without `--dangerous`, the tool's own permission system is active and will prompt before taking sensitive actions, including network requests. This is the recommended mode for most use cases.
+> Without `--dangerous`, the tool's own permission system is active and will prompt before taking sensitive actions. This is the recommended mode for most use cases.
 
 ## How it works
 
@@ -153,6 +180,7 @@ All other host environment variables are stripped.
 │                                             │
 │  systemd                                    │
 │    → llmjail-mounts: mount 9p shares        │
+│    → llmjail-net-filter: dnsmasq + nftables │
 │    → llmjail-tool: exec claude/codex        │
 │                                             │
 │  ExecStopPost: poweroff when tool exits     │

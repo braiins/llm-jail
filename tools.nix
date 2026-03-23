@@ -5,6 +5,11 @@
       mem = 4096; vcpu = 2;
       configDirName = ".claude";
       persistDirs = [ "projects" "sessions" "statsig" "telemetry" ];
+      allowedDomains = [
+        "api.anthropic.com"
+        "statsig.anthropic.com"
+        "sentry.io"
+      ];
     };
   };
   codex = {
@@ -13,6 +18,11 @@
       mem = 4096; vcpu = 2;
       configDirName = ".codex";
       persistDirs = [ "projects" "sessions" "statsig" "telemetry" ];
+      allowedDomains = [
+        "api.openai.com"
+        "chatgpt.com"
+        "sentry.io"
+      ];
     };
   };
 }
