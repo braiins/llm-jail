@@ -40,7 +40,7 @@ pkgs.writeShellApplication {
     Usage: llm-jail-${name} [options] [-- tool-args...]
 
     Options:
-      --dangerous           Enable the tool's full-auto / dangerous mode
+      --dangerous           Enable the tool's dangerous / unattended mode
       --config-dir PATH     Tool config directory (default: ~/${toolDefaults.configDirName})
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)

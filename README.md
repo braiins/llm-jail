@@ -7,7 +7,7 @@ Supported tools:
 | Tool | Runner command | Dangerous flag |
 |------|---------------|----------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `llm-jail-claude` | `--dangerously-skip-permissions` |
-| [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--full-auto` |
+| [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
 
 ## Requirements
 
@@ -45,7 +45,7 @@ llm-jail-{claude,codex} [options] [-- tool-args...]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--dangerous` | Enable the tool's full-auto / dangerous mode | off |
+| `--dangerous` | Enable the tool's dangerous / unattended mode | off |
 | `--config-dir PATH` | Tool config directory | `~/.claude` or `~/.codex` |
 | `--mount PATH` | Extra read-write mount (repeatable) | — |
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | — |
@@ -148,7 +148,7 @@ Default allowed domains per tool:
 ## Dangerous mode
 
 > [!CAUTION]
-> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--full-auto` for Codex). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
+> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
 >
 > Network filtering remains active in dangerous mode — the agent can only reach whitelisted domains. To grant unrestricted network access, use `--no-net-filter` (this is independent of `--dangerous`).
 >
