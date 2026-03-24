@@ -135,6 +135,8 @@
             OPTS="trans=virtio,version=9p2000.L,cache=mmap"
             if [ "$mode" = "ro" ]; then
               OPTS="$OPTS,ro"
+            elif [ "$mode" = "ro-nocache" ]; then
+              OPTS="trans=virtio,version=9p2000.L,cache=none,ro"
             fi
             ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
           fi
@@ -156,6 +158,20 @@
           ${pkgs.coreutils}/bin/chown user:users "/home/user/$name"
         done
 
+        # Live-mount credentials from the ro lower layer (cache=none) so
+        # host-side token refreshes are visible instantly in the guest.
+        # Bind-mount bypasses the overlay — reads go straight to the 9p mount.
+        for cdir in /home/user/*-ro; do
+          [ -d "$cdir" ] || continue
+          target="/home/user/$(${pkgs.coreutils}/bin/basename "$cdir" -ro)"
+          CRED="$cdir/.credentials.json"
+          DEST="$target/.credentials.json"
+          if [ -f "$CRED" ]; then
+            ${pkgs.coreutils}/bin/touch "$DEST"
+            ${pkgs.util-linux}/bin/mount --bind "$CRED" "$DEST"
+            echo "Bind-mounted credentials: $CRED -> $DEST"
+          fi
+        done
 
       '';
     };

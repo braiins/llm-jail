@@ -170,7 +170,7 @@ pkgs.writeShellApplication {
       MOUNT_IDX=$((MOUNT_IDX + 1))
 
       local virtfs="local,path=$hostpath,security_model=none,mount_tag=$tag"
-      if [ "$mode" = "ro" ]; then
+      if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
         virtfs="$virtfs,readonly=on"
       fi
       VIRTFS_ARGS+=("-virtfs" "$virtfs")
@@ -185,8 +185,9 @@ pkgs.writeShellApplication {
     # Default mounts
     add_mount "$(pwd)" "/workspace" "rw"
 
-    # Mount config dir read-only (overlay lower layer)
-    add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}-ro" "ro"
+    # Mount config dir read-only with no cache (overlay lower layer)
+    # cache=none ensures host-side credential refreshes are visible instantly
+    add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}-ro" "ro-nocache"
 
     # Overlay directive: guest creates overlayfs with tmpfs upper
     # Format: lower:target:overlay (no 9p device needed)
