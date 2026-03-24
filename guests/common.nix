@@ -297,6 +297,11 @@
           done < /llmjail-env/tool-args
         fi
 
+        # Apply terminal dimensions to serial TTY so TUI apps render correctly
+        if [ -n "''${COLUMNS:-}" ] && [ -n "''${LINES:-}" ]; then
+          stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
+        fi
+
         cd /workspace
         exec ${config.llmjail.toolBinary} "''${ARGS[@]}"
       '';

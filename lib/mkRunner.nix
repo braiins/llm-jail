@@ -93,6 +93,20 @@ pkgs.writeShellApplication {
       # Forward AWS variables
       env | grep '^AWS_' || true
 
+      # Forward terminal type and dimensions so TUI apps render correctly
+      for var in TERM COLORTERM; do
+        if [ -n "''${!var:-}" ]; then
+          echo "$var=\"''${!var}\""
+        fi
+      done
+      if [ -z "''${TERM:-}" ]; then
+        echo "TERM=\"xterm-256color\""
+      fi
+      if STTY_SIZE=$(stty size 2>/dev/null); then
+        echo "LINES=''${STTY_SIZE%% *}"
+        echo "COLUMNS=''${STTY_SIZE##* }"
+      fi
+
       echo "HOME=/home/user"
       echo "LLMJAIL_DANGEROUS=$DANGEROUS"
     } > "$ENV_FILE"
