@@ -8,6 +8,8 @@ on:
 jobs:
   update:
     runs-on: ubuntu-latest
+    outputs:
+      pull-request-number: ${{ steps.create-pr.outputs.pull-request-number }}
     permissions:
       contents: write
       pull-requests: write
@@ -23,6 +25,7 @@ jobs:
         run: nix flake update codex-cli-nix
 
       - name: Create pull request
+        id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "flake: update claude-code-nix and codex-cli-nix inputs"
@@ -33,3 +36,8 @@ jobs:
             - `codex-cli-nix`
           branch: auto-update-flake-inputs
           delete-branch: true
+
+  smoke-test:
+    needs: update
+    if: needs.update.outputs.pull-request-number
+    uses: ./.github/workflows/ci.yml
