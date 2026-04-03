@@ -79,7 +79,7 @@ let
             machine.succeed("nix eval --expr 'true'")
 
         with subtest("nixpkgs is pinned in registry and NIX_PATH"):
-            machine.succeed("nix registry list | grep 'flake:nixpkgs'")
+            machine.succeed("cat /etc/nix/registry.json | grep nixpkgs")
             machine.succeed("nix-instantiate --eval -E '<nixpkgs>'")
       '';
     };
