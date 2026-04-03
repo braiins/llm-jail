@@ -1,4 +1,4 @@
-{ pkgs, claude-code, codex-cli }:
+{ pkgs, nixpkgs, claude-code, codex-cli }:
 
 let
   mkSmokeTest = { name, guestModule, toolBinary }:
@@ -7,7 +7,7 @@ let
 
       nodes.machine = { config, lib, pkgs, ... }: {
         imports = [ guestModule ];
-        _module.args = { inherit claude-code codex-cli; };
+        _module.args = { inherit nixpkgs claude-code codex-cli; };
 
         # Override 9p filesystem entries from common.nix — the test framework
         # provides its own root and /nix/store via virtualisation options.
@@ -77,6 +77,10 @@ let
         with subtest("nix has flakes enabled"):
             machine.succeed("nix --version")
             machine.succeed("nix eval --expr 'true'")
+
+        with subtest("nixpkgs is pinned in registry and NIX_PATH"):
+            machine.succeed("nix registry list | grep 'flake:nixpkgs'")
+            machine.succeed("nix-instantiate --eval -E '<nixpkgs>'")
       '';
     };
 
@@ -85,7 +89,7 @@ let
 
     nodes.machine = { config, lib, pkgs, ... }: {
       imports = [ ../guests/claude.nix ];
-      _module.args = { inherit claude-code codex-cli; };
+      _module.args = { inherit nixpkgs claude-code codex-cli; };
 
       fileSystems."/nix/.ro-store" = lib.mkForce {
         device = "tmpfs";

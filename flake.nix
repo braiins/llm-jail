@@ -22,7 +22,7 @@
 
           guest = nixpkgs.lib.nixosSystem {
             inherit system;
-            specialArgs = { inherit claude-code codex-cli; };
+            specialArgs = { inherit nixpkgs claude-code codex-cli; };
             modules = [ toolDef.guestModule ];
           };
 
@@ -47,6 +47,7 @@
 
       checks = forAllSystems (system:
         import ./tests {
+          inherit nixpkgs;
           pkgs = nixpkgs.legacyPackages.${system};
           claude-code = claude-code-nix.packages.${system}.default;
           codex-cli = codex-cli-nix.packages.${system}.default;

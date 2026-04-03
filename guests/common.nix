@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nixpkgs, ... }:
 
 {
   # ── Tool options (set by each guest module) ─────────────────────────────
@@ -349,8 +349,14 @@
 
     documentation.enable = false;
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
-
     nix.settings.sandbox = false;
+
+    # Pin nixpkgs so `nix shell nixpkgs#...` and `nix-shell -p ...` resolve
+    # to the same nixpkgs used to build this system.  The store path is part
+    # of the system closure (GC root) — it cannot be collected while the VM
+    # runner script exists, preventing stale 9p cache hits on GC'd paths.
+    nix.registry.nixpkgs.flake = nixpkgs;
+    nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
     systemd.services.systemd-networkd-wait-online.enable = false;
 
     system.stateVersion = "24.11";
