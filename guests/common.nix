@@ -16,7 +16,7 @@
   config = {
     # ── Boot ──────────────────────────────────────────────────────────────
     boot.loader.grub.enable = false;
-    boot.kernelParams = [ "console=ttyS0" ];
+    boot.kernelParams = [ "console=ttyS1" ];
     boot.initrd.availableKernelModules = [
       "9p" "9pnet_virtio"
       "virtio_pci" "virtio_blk" "virtio_net" "virtio_rng"
@@ -88,7 +88,7 @@
       uid = 1000;
       home = "/home/user";
       shell = pkgs.bash;
-      extraGroups = [ "tty" "dialout" ];
+      extraGroups = [ "tty" "dialout" "systemd-journal" ];
     };
 
     # ── llmjail-mounts service ───────────────────────────────────────────
@@ -345,6 +345,7 @@
     # ── Disable unnecessary services ─────────────────────────────────────
     # No getty on serial — tool service owns the TTY
     systemd.services."serial-getty@ttyS0".enable = false;
+    systemd.services."serial-getty@ttyS1".enable = false;
     systemd.services."getty@tty1".enable = false;
 
     documentation.enable = false;

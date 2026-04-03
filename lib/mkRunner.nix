@@ -235,7 +235,7 @@ pkgs.writeShellApplication {
     done
 
     # ── Kernel command line ───────────────────────────────────────────
-    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS0 llmjail.mounts=$MOUNT_CMDLINE"
+    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"
 
     if [ "$STORE_DISK" -gt 0 ]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.store_disk=1"
@@ -272,6 +272,7 @@ pkgs.writeShellApplication {
       -append "$KERNEL_PARAMS" \
       -nographic \
       -serial mon:stdio \
+      -serial file:"$RUNDIR/kernel.log" \
       -no-reboot \
       -device virtio-rng-pci \
       -nic user,model=virtio-net-pci \

@@ -34,7 +34,7 @@ let
         # Tool service will fail without credentials — prevent it from
         # blocking boot or powering off the VM.
         systemd.services.llmjail-tool = {
-          wantedBy = lib.mkForce [];
+          wantedBy = lib.mkForce [ ];
           serviceConfig.ExecStopPost = lib.mkForce "";
         };
 
@@ -81,6 +81,9 @@ let
         with subtest("nixpkgs is pinned in registry and NIX_PATH"):
             machine.succeed("cat /etc/nix/registry.json | grep nixpkgs")
             machine.succeed("nix-instantiate --eval -E '<nixpkgs>'")
+
+        with subtest("user can read kernel journal"):
+            machine.succeed("su - user -c 'journalctl -k --no-pager -n 1'")
       '';
     };
 
@@ -114,7 +117,7 @@ let
       ];
 
       systemd.services.llmjail-tool = {
-        wantedBy = lib.mkForce [];
+        wantedBy = lib.mkForce [ ];
         serviceConfig.ExecStopPost = lib.mkForce "";
       };
 
