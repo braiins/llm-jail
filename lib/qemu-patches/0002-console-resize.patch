@@ -1,0 +1,241 @@
+From: Szymon Lukasz <noh4hss@gmail.com>
+Date: Mon, 19 Jan 2026 04:27:45 +0100
+Subject: [PATCH] chardev: add CHR_EVENT_RESIZE
+
+Add a new chardev event, CHR_EVENT_RESIZE, which a backend should
+trigger if it detects the size of the connected terminal changed.
+
+Signed-off-by: Szymon Lukasz <noh4hss@gmail.com>
+[Filip: add note that only the focused frontend gets the event]
+Signed-off-by: Filip Hejsek <filip.hejsek@gmail.com>
+---
+ backends/cryptodev-vhost-user.c | 1 +
+ chardev/char.c                  | 1 +
+ hw/block/vhost-user-blk.c       | 1 +
+ hw/char/terminal3270.c          | 1 +
+ hw/char/virtio-console.c        | 1 +
+ hw/ipmi/ipmi_bmc_extern.c       | 1 +
+ hw/scsi/vhost-user-scsi.c       | 1 +
+ hw/usb/ccid-card-passthru.c     | 1 +
+ hw/usb/dev-serial.c             | 1 +
+ hw/usb/redirect.c               | 1 +
+ hw/virtio/vhost-user-base.c     | 1 +
+ hw/virtio/vhost-user-scmi.c     | 1 +
+ include/chardev/char.h          | 6 ++++++
+ monitor/hmp.c                   | 1 +
+ monitor/qmp.c                   | 1 +
+ net/passt.c                     | 1 +
+ net/vhost-user.c                | 1 +
+ 17 files changed, 22 insertions(+)
+
+diff --git a/backends/cryptodev-vhost-user.c b/backends/cryptodev-vhost-user.c
+index cc478d9902..36564d4307 100644
+--- a/backends/cryptodev-vhost-user.c
++++ b/backends/cryptodev-vhost-user.c
+@@ -173,6 +173,7 @@ static void cryptodev_vhost_user_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/chardev/char.c b/chardev/char.c
+index 3e432195a5..0f493d793f 100644
+--- a/chardev/char.c
++++ b/chardev/char.c
+@@ -75,6 +75,7 @@ void qemu_chr_be_event(Chardev *s, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/block/vhost-user-blk.c b/hw/block/vhost-user-blk.c
+index 4d81d2dc34..a460d6ed33 100644
+--- a/hw/block/vhost-user-blk.c
++++ b/hw/block/vhost-user-blk.c
+@@ -412,6 +412,7 @@ static void vhost_user_blk_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/char/terminal3270.c b/hw/char/terminal3270.c
+index 1d857bad9b..c212fd1aac 100644
+--- a/hw/char/terminal3270.c
++++ b/hw/char/terminal3270.c
+@@ -172,6 +172,7 @@ static void chr_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/char/virtio-console.c b/hw/char/virtio-console.c
+index 25db0f019b..dcfe5830f9 100644
+--- a/hw/char/virtio-console.c
++++ b/hw/char/virtio-console.c
+@@ -168,6 +168,7 @@ static void chr_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/ipmi/ipmi_bmc_extern.c b/hw/ipmi/ipmi_bmc_extern.c
+index fa08ed6c21..bd7c61b2d2 100644
+--- a/hw/ipmi/ipmi_bmc_extern.c
++++ b/hw/ipmi/ipmi_bmc_extern.c
+@@ -436,6 +436,7 @@ static void chr_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/scsi/vhost-user-scsi.c b/hw/scsi/vhost-user-scsi.c
+index 3612897d4b..5601097bc9 100644
+--- a/hw/scsi/vhost-user-scsi.c
++++ b/hw/scsi/vhost-user-scsi.c
+@@ -226,6 +226,7 @@ static void vhost_user_scsi_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/usb/ccid-card-passthru.c b/hw/usb/ccid-card-passthru.c
+index 5ab7855272..3f4052ec82 100644
+--- a/hw/usb/ccid-card-passthru.c
++++ b/hw/usb/ccid-card-passthru.c
+@@ -323,6 +323,7 @@ static void ccid_card_vscard_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
+     case CHR_EVENT_CLOSED:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/usb/dev-serial.c b/hw/usb/dev-serial.c
+index b238cb7937..98d2abbd56 100644
+--- a/hw/usb/dev-serial.c
++++ b/hw/usb/dev-serial.c
+@@ -576,6 +576,7 @@ static void usb_serial_event(void *opaque, QEMUChrEvent event)
+         break;
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/usb/redirect.c b/hw/usb/redirect.c
+index fda5bbca67..34ab8339e1 100644
+--- a/hw/usb/redirect.c
++++ b/hw/usb/redirect.c
+@@ -1390,6 +1390,7 @@ static void usbredir_chardev_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/virtio/vhost-user-base.c b/hw/virtio/vhost-user-base.c
+index 01ab9ca56b..fd3a9d6265 100644
+--- a/hw/virtio/vhost-user-base.c
++++ b/hw/virtio/vhost-user-base.c
+@@ -267,6 +267,7 @@ static void vub_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/hw/virtio/vhost-user-scmi.c b/hw/virtio/vhost-user-scmi.c
+index f9264c4374..180787ec6d 100644
+--- a/hw/virtio/vhost-user-scmi.c
++++ b/hw/virtio/vhost-user-scmi.c
+@@ -214,6 +214,7 @@ static void vu_scmi_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/include/chardev/char.h b/include/chardev/char.h
+index 237238e5a0..2c139f07dc 100644
+--- a/include/chardev/char.h
++++ b/include/chardev/char.h
+@@ -22,6 +22,12 @@ typedef enum {
+     CHR_EVENT_OPENED, /* new connection established */
+     CHR_EVENT_MUX_IN, /* mux-focus was set to this terminal */
+     CHR_EVENT_MUX_OUT, /* mux-focus will move on */
++    CHR_EVENT_RESIZE, /*
++                       * the size of the terminal connected to
++                       * the chardev has changed.  NOTE: this event is only
++                       * sent to the focused frontend, so you should also
++                       * update the size on receiving CHR_EVENT_MUX_IN.
++                       */
+     CHR_EVENT_CLOSED /* connection closed.  NOTE: currently this event
+                       * is only bound to the read port of the chardev.
+                       * Normally the read port and write port of a
+diff --git a/monitor/hmp.c b/monitor/hmp.c
+index 4caafbc714..dea912092d 100644
+--- a/monitor/hmp.c
++++ b/monitor/hmp.c
+@@ -1445,6 +1445,7 @@ static void monitor_event(void *opaque, QEMUChrEvent event)
+         break;
+ 
+     case CHR_EVENT_BREAK:
++    case CHR_EVENT_RESIZE:
+         /* Ignored */
+         break;
+     }
+diff --git a/monitor/qmp.c b/monitor/qmp.c
+index 687019811f..3d5ab8ff4f 100644
+--- a/monitor/qmp.c
++++ b/monitor/qmp.c
+@@ -486,6 +486,7 @@ static void monitor_qmp_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/net/passt.c b/net/passt.c
+index 9ed811a514..a3e239f306 100644
+--- a/net/passt.c
++++ b/net/passt.c
+@@ -421,6 +421,7 @@ static void passt_vhost_user_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+diff --git a/net/vhost-user.c b/net/vhost-user.c
+index a4bb49bbcf..0b8df2ee30 100644
+--- a/net/vhost-user.c
++++ b/net/vhost-user.c
+@@ -367,6 +367,7 @@ static void net_vhost_user_event(void *opaque, QEMUChrEvent event)
+     case CHR_EVENT_BREAK:
+     case CHR_EVENT_MUX_IN:
+     case CHR_EVENT_MUX_OUT:
++    case CHR_EVENT_RESIZE:
+         /* Ignore */
+         break;
+     }
+ 
+-- 

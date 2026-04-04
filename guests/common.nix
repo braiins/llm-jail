@@ -16,10 +16,10 @@
   config = {
     # ── Boot ──────────────────────────────────────────────────────────────
     boot.loader.grub.enable = false;
-    boot.kernelParams = [ "console=ttyS1" ];
+    boot.kernelParams = [ "console=ttyS0" ];
     boot.initrd.availableKernelModules = [
       "9p" "9pnet_virtio"
-      "virtio_pci" "virtio_blk" "virtio_net" "virtio_rng"
+      "virtio_pci" "virtio_blk" "virtio_net" "virtio_rng" "virtio_console"
       "overlay"
     ];
     boot.kernelModules = [ "nf_tables" ];
@@ -313,11 +313,6 @@
           done < /llmjail-env/tool-args
         fi
 
-        # Apply terminal dimensions to serial TTY so TUI apps render correctly
-        if [ -n "''${COLUMNS:-}" ] && [ -n "''${LINES:-}" ]; then
-          stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
-        fi
-
         cd /workspace
         exec ${config.llmjail.toolBinary} "''${ARGS[@]}"
       '';
@@ -334,7 +329,7 @@
         StandardInput = "tty";
         StandardOutput = "tty";
         StandardError = "tty";
-        TTYPath = "/dev/ttyS0";
+        TTYPath = "/dev/hvc0";
         TTYReset = true;
         TTYVHangup = false;
         ExecStart = "${launcher}";
@@ -346,6 +341,7 @@
     # No getty on serial — tool service owns the TTY
     systemd.services."serial-getty@ttyS0".enable = false;
     systemd.services."serial-getty@ttyS1".enable = false;
+    systemd.services."serial-getty@hvc0".enable = false;
     systemd.services."getty@tty1".enable = false;
 
     documentation.enable = false;

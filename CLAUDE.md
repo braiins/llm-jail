@@ -25,7 +25,7 @@ This is a Nix flake that runs coding agents inside QEMU microVMs with hardware-l
 
 **Host side (`lib/mkRunner.nix`):** A `writeShellApplication` that parses CLI args at runtime, writes env vars and tool args to a temp dir, sets up 9p virtfs mounts, optionally creates a store disk image, and launches QEMU with direct kernel boot. On NixOS hosts, `/run/current-system/sw` and `/etc/profiles/per-user/$USER` are auto-mounted so host packages are available in the guest.
 
-**Guest side (`guests/common.nix` + `guests/claude.nix`):** Minimal NixOS. Two systemd services: `llmjail-mounts` parses kernel cmdline (`llmjail.mounts=tag:path:mode,...`) to mount user directories via 9p, then `llmjail-tool` runs the actual tool on `/dev/ttyS0`. `ExecStopPost` powers off the VM when the tool exits.
+**Guest side (`guests/common.nix` + `guests/claude.nix`):** Minimal NixOS. Two systemd services: `llmjail-mounts` parses kernel cmdline (`llmjail.mounts=tag:path:mode,...`) to mount user directories via 9p, then `llmjail-tool` runs the actual tool on `/dev/hvc0` (virtio-console). `ExecStopPost` powers off the VM when the tool exits. Terminal resize is handled by virtio-console with patches from `lib/qemuOverlay.nix` (not yet upstream in QEMU).
 
 **Adding a new tool:** Add an entry to `tools.nix` pointing to a new guest module under `guests/`. The guest module imports `common.nix` and overrides `systemd.services.llmjail-tool.serviceConfig.ExecStart`.
 

@@ -93,7 +93,8 @@ pkgs.writeShellApplication {
       # Forward AWS variables
       env | grep '^AWS_' || true
 
-      # Forward terminal type and dimensions so TUI apps render correctly
+      # Forward terminal type so TUI apps render correctly
+      # Terminal dimensions are propagated dynamically via virtio-console resize.
       for var in TERM COLORTERM; do
         if [ -n "''${!var:-}" ]; then
           echo "$var=\"''${!var}\""
@@ -101,10 +102,6 @@ pkgs.writeShellApplication {
       done
       if [ -z "''${TERM:-}" ]; then
         echo "TERM=\"xterm-256color\""
-      fi
-      if STTY_SIZE=$(stty size 2>/dev/null); then
-        echo "LINES=''${STTY_SIZE%% *}"
-        echo "COLUMNS=''${STTY_SIZE##* }"
       fi
 
       echo "HOME=/home/user"
@@ -235,7 +232,7 @@ pkgs.writeShellApplication {
     done
 
     # ── Kernel command line ───────────────────────────────────────────
-    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"
+    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS0 llmjail.mounts=$MOUNT_CMDLINE"
 
     if [ "$STORE_DISK" -gt 0 ]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.store_disk=1"
@@ -271,7 +268,10 @@ pkgs.writeShellApplication {
       -initrd ${toplevel}/initrd \
       -append "$KERNEL_PARAMS" \
       -nographic \
-      -serial mon:stdio \
+      -chardev stdio,id=char0,mux=on,signal=off \
+      -device virtio-serial-pci \
+      -device virtconsole,chardev=char0 \
+      -mon chardev=char0 \
       -serial file:"$RUNDIR/kernel.log" \
       -no-reboot \
       -device virtio-rng-pci \

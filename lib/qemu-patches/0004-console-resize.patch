@@ -1,0 +1,60 @@
+From: Szymon Lukasz <noh4hss@gmail.com>
+Date: Mon, 19 Jan 2026 04:27:47 +0100
+Subject: [PATCH] char-mux: add support for the terminal size
+
+The terminal size of a mux chardev should be the same as the real
+chardev, so listen for CHR_EVENT_RESIZE to be up to date.
+
+We forward CHR_EVENT_RESIZE only to the focused frontend. This means
+frontends should update their view of the terminal size on
+receiving CHR_EVENT_MUX_IN.
+
+Signed-off-by: Szymon Lukasz <noh4hss@gmail.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: Filip Hejsek <filip.hejsek@gmail.com>
+---
+ chardev/char-mux.c | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/chardev/char-mux.c b/chardev/char-mux.c
+index db9e89f441..b23fedbcfe 100644
+--- a/chardev/char-mux.c
++++ b/chardev/char-mux.c
+@@ -264,9 +264,24 @@ void mux_chr_send_all_event(Chardev *chr, QEMUChrEvent event)
+     }
+ }
+ 
++static void mux_update_winsize(Chardev *chr)
++{
++    MuxChardev *d = MUX_CHARDEV(chr);
++    uint16_t cols, rows;
++
++    qemu_chr_fe_get_winsize(&d->chr, &cols, &rows);
++    qemu_chr_resize(chr, cols, rows);
++}
++
+ static void mux_chr_event(void *opaque, QEMUChrEvent event)
+ {
+-    mux_chr_send_all_event(CHARDEV(opaque), event);
++    Chardev *chr = CHARDEV(opaque);
++
++    if (event == CHR_EVENT_RESIZE) {
++        mux_update_winsize(chr);
++    } else {
++        mux_chr_send_all_event(chr, event);
++    }
+ }
+ 
+ static GSource *mux_chr_add_watch(Chardev *s, GIOCondition cond)
+@@ -382,6 +397,7 @@ static void qemu_chr_open_mux(Chardev *chr,
+      */
+     *be_opened = muxes_opened;
+     qemu_chr_fe_init(&d->chr, drv, errp);
++    mux_update_winsize(chr);
+ }
+
+ static void qemu_chr_parse_mux(QemuOpts *opts, ChardevBackend *backend,
+ 
+-- 
+2.52.0
+ 

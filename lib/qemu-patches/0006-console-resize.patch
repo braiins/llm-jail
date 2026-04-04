@@ -1,0 +1,91 @@
+From: Szymon Lukasz <noh4hss@gmail.com>
+Date: Mon, 19 Jan 2026 04:27:49 +0100
+Subject: [PATCH] char-stdio: add support for the terminal size
+
+Update the terminal size upon SIGWINCH delivery.
+
+Signed-off-by: Szymon Lukasz <noh4hss@gmail.com>
+[Filip: use DECLARE_INSTANCE_CHECKER]
+Signed-off-by: Filip Hejsek <filip.hejsek@gmail.com>
+
+Adapted for QEMU 10.2.x: qemu_chr_open_stdio/qemu_chr_set_echo_stdio names.
+---
+ chardev/char-stdio.c | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/chardev/char-stdio.c b/chardev/char-stdio.c
+index 2568164a10..f55a7be24b 100644
+--- a/chardev/char-stdio.c
++++ b/chardev/char-stdio.c
+@@ -34,7 +34,9 @@
+ #include "chardev/char-win-stdio.h"
+ #else
+ #include <termios.h>
++#include <sys/ioctl.h>
+ #include "chardev/char-fd.h"
++#include "qemu/main-loop.h"
+ #endif
+
+ #ifndef _WIN32
+@@ -46,6 +48,14 @@ static bool stdio_in_use;
+ static bool stdio_allow_signal;
+ static bool stdio_echo_state;
+
++typedef struct {
++    FDChardev parent;
++    Notifier resize_notifier;
++} StdioChardev;
++
++DECLARE_INSTANCE_CHECKER(StdioChardev, STDIO_CHARDEV,
++                         TYPE_CHARDEV_STDIO)
++
+ static void term_exit(void)
+ {
+     if (stdio_in_use) {
+@@ -85,6 +95,20 @@ static void term_stdio_handler(int sig)
+     qemu_chr_set_echo_stdio(NULL, stdio_echo_state);
+ }
+
++static void qemu_chr_resize_stdio(Chardev *chr)
++{
++    struct winsize ws;
++    if (ioctl(1, TIOCGWINSZ, &ws) != -1) {
++        qemu_chr_resize(chr, ws.ws_col, ws.ws_row);
++    }
++}
++
++static void term_resize_notify(Notifier *n, void *data)
++{
++    StdioChardev *s = container_of(n, StdioChardev, resize_notifier);
++    qemu_chr_resize_stdio(CHARDEV(s));
++}
++
+ static void qemu_chr_open_stdio(Chardev *chr,
+                                 ChardevBackend *backend,
+                                 bool *be_opened,
+@@ -92,4 +116,5 @@ static void qemu_chr_open_stdio(Chardev *chr,
+ {
++    StdioChardev *s = STDIO_CHARDEV(chr);
+     ChardevStdio *opts = backend->u.stdio.data;
+     struct sigaction act;
+
+@@ -124,5 +149,9 @@ static void qemu_chr_open_stdio(Chardev *chr,
+     stdio_allow_signal = !opts->has_signal || opts->signal;
+     qemu_chr_set_echo_stdio(chr, false);
++
++    qemu_chr_resize_stdio(chr);
++    s->resize_notifier.notify = term_resize_notify;
++    sigwinch_add_notifier(&s->resize_notifier);
+ }
+ #endif
+
+@@ -162,6 +192,7 @@ static const TypeInfo char_stdio_type_info = {
+     .parent = TYPE_CHARDEV_WIN_STDIO,
+ #else
+     .parent = TYPE_CHARDEV_FD,
++    .instance_size = sizeof(StdioChardev),
+ #endif
+     .instance_finalize = char_stdio_finalize,
+     .class_init = char_stdio_class_init,
+--
+2.52.0

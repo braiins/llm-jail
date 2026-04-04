@@ -7,16 +7,31 @@
     codex-cli-nix.url = "github:sadjow/codex-cli-nix";
   };
 
-  outputs = { self, nixpkgs, claude-code-nix, codex-cli-nix, ... }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      claude-code-nix,
+      codex-cli-nix,
+      ...
+    }:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       tools = import ./tools.nix;
+      qemuOverlay = import ./lib/qemuOverlay.nix;
 
       forAllSystems = f: nixpkgs.lib.genAttrs supportedSystems f;
 
-      mkTool = system: toolName: toolDef:
+      mkTool =
+        system: toolName: toolDef:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ qemuOverlay ];
+          };
           claude-code = claude-code-nix.packages.${system}.default;
           codex-cli = codex-cli-nix.packages.${system}.default;
 
@@ -31,21 +46,23 @@
             name = toolName;
             toolDefaults = toolDef.defaults;
           };
-        in runner;
+        in
+        runner;
 
-    in {
-      packages = forAllSystems (system:
-        nixpkgs.lib.mapAttrs (name: def: mkTool system name def) tools
-      );
+    in
+    {
+      packages = forAllSystems (system: nixpkgs.lib.mapAttrs (name: def: mkTool system name def) tools);
 
-      apps = forAllSystems (system:
+      apps = forAllSystems (
+        system:
         nixpkgs.lib.mapAttrs (name: _: {
           type = "app";
           program = "${self.packages.${system}.${name}}/bin/llm-jail-${name}";
         }) tools
       );
 
-      checks = forAllSystems (system:
+      checks = forAllSystems (
+        system:
         import ./tests {
           inherit nixpkgs;
           pkgs = nixpkgs.legacyPackages.${system};

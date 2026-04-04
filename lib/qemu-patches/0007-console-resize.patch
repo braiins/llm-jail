@@ -1,0 +1,91 @@
+From: Szymon Lukasz <noh4hss@gmail.com>
+Date: Mon, 19 Jan 2026 04:27:50 +0100
+Subject: [PATCH] qmp: add chardev-window-size-changed command
+
+The managment software can use this command to notify QEMU about the
+size of the terminal connected to a chardev, QEMU can then forward this
+information to the guest if the chardev is connected to a virtio console
+device.
+
+Signed-off-by: Szymon Lukasz <noh4hss@gmail.com>
+Suggested-by: Daniel P. Berrangé <berrange@redhat.com>
+[Filip: rename command, change documentation]
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Acked-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Filip Hejsek <filip.hejsek@gmail.com>
+---
+ chardev/char.c | 14 ++++++++++++++
+ qapi/char.json | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 45 insertions(+)
+
+diff --git a/chardev/char.c b/chardev/char.c
+index f3c6a12c99..458059a9e0 100644
+--- a/chardev/char.c
++++ b/chardev/char.c
+@@ -1266,6 +1266,20 @@ bool qmp_add_client_char(int fd, bool has_skipauth, bool skipauth,
+     return true;
+ }
+ 
++void qmp_chardev_window_size_changed(const char *id, uint16_t cols,
++                                     uint16_t rows, Error **errp)
++{
++    Chardev *chr;
++
++    chr = qemu_chr_find(id);
++    if (chr == NULL) {
++        error_setg(errp, "Chardev '%s' not found", id);
++        return;
++    }
++
++    qemu_chr_resize(chr, cols, rows);
++}
++
+ /*
+  * Add a timeout callback for the chardev (in milliseconds), return
+  * the GSource object created. Please use this to add timeout hook for
+diff --git a/qapi/char.json b/qapi/char.json
+index 140614f82c..bc08f0161a 100644
+--- a/qapi/char.json
++++ b/qapi/char.json
+@@ -861,6 +861,37 @@
+ { 'command': 'chardev-send-break',
+   'data': { 'id': 'str' } }
+ 
++##
++# @chardev-window-size-changed:
++#
++# Notifies a chardev about the current size of the terminal connected
++# to this chardev.  The information will be forwarded to the guest if
++# the chardev is connected to a virtio console device.
++#
++# The initial size is 0x0, which should be interpreted as an unknown
++# size.
++#
++# Some backends detect the terminal size automatically, in which case
++# the size may unpredictably revert to the detected one at any time.
++#
++# @id: the chardev's ID, must exist
++#
++# @cols: the number of columns
++#
++# @rows: the number of rows
++#
++# Since: 11.0
++#
++# .. qmp-example::
++#
++#     -> { "execute": "chardev-window-size-changed", "arguments": { "id": "foo", "cols": 80, "rows": 24 } }
++#     <- { "return": {} }
++##
++{ 'command': 'chardev-window-size-changed',
++  'data': { 'id': 'str',
++            'cols': 'uint16',
++            'rows': 'uint16' } }
++
+ ##
+ # @VSERPORT_CHANGE:
+ #
+ 
+-- 
+2.52.0
+ 
