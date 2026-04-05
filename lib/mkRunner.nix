@@ -18,6 +18,7 @@ pkgs.writeShellApplication {
     pkgs.util-linux
     pkgs.nix
     pkgs.e2fsprogs
+    pkgs.socat
   ];
   text = ''
     set -euo pipefail
@@ -78,7 +79,56 @@ pkgs.writeShellApplication {
 
     # ── Temp dir for env file ─────────────────────────────────────────
     RUNDIR="$(mktemp -d)"
-    trap 'rm -rf "$RUNDIR"' EXIT
+    WINCH_FWD_PID=""
+    cleanup() {
+      [ -n "$WINCH_FWD_PID" ] && kill "$WINCH_FWD_PID" 2>/dev/null
+      rm -rf "$RUNDIR"
+    }
+    trap cleanup EXIT
+
+    # ── Terminal resize side channel ──────────────────────────────────
+    # TODO: QEMU has a pending patch series (v6, "console: add
+    # TIOCSWINSZ support") that adds native SIGWINCH→virtconsole
+    # forwarding. When those patches land upstream and reach nixpkgs,
+    # this entire side-channel (FIFO, socat bridge, virtio-serial
+    # chardev, and the guest llmjail-winsize service) can be replaced
+    # by switching to -chardev console + hvc0 with the resize flag.
+    #
+    # Stock QEMU has no SIGWINCH→virtio-console forwarding, so we run a
+    # dedicated virtio-serial port (llmjail.winsize) as a unix-socket
+    # chardev and push "cols rows" lines through it on every SIGWINCH.
+    # The guest's llmjail-winsize service reads the port and issues
+    # TIOCSWINSZ on /dev/ttyS0, delivering SIGWINCH to the tool pgrp.
+    #
+    # QEMU runs in the foreground so stdin/stdout are cleanly wired to
+    # -serial mon:stdio. bash defers trap handlers until a synchronous
+    # foreground child exits, so a dedicated subshell owns the SIGWINCH
+    # trap and parks in `sleep & wait` — wait's trap-interrupt semantics
+    # fire the trap promptly on each resize.
+    WINSIZE_SOCK="$RUNDIR/winsize.sock"
+    WINSIZE_FIFO="$RUNDIR/winsize.fifo"
+    mkfifo "$WINSIZE_FIFO"
+    # Hold the FIFO open RDWR on fd 3 so trap writes never block on
+    # "no writer" and the bridge never sees premature EOF.
+    exec 3<>"$WINSIZE_FIFO"
+
+    (
+      winsize_emit() {
+        # Read from /dev/tty explicitly: bash redirects an async command's
+        # stdin to /dev/null when job control is disabled (POSIX).
+        local size
+        size=$(stty size </dev/tty 2>/dev/null) || return 0
+        # stty size prints "rows cols"; the guest reader expects "cols rows".
+        printf '%s %s\n' "''${size##* }" "''${size%% *}" >&3 || true
+      }
+      trap winsize_emit WINCH
+      winsize_emit
+      while :; do
+        sleep 86400 &
+        wait $! 2>/dev/null || true
+      done
+    ) &
+    WINCH_FWD_PID=$!
 
     # ── Write env file ────────────────────────────────────────────────
     ENV_FILE="$RUNDIR/env"
@@ -262,6 +312,11 @@ pkgs.writeShellApplication {
       KVM_ARGS+=("-cpu" "max")
     fi
 
+    # ── Start the winsize bridge ───────────────────────────────────────
+    # socat itself retries the UNIX-CONNECT until QEMU binds the socket,
+    # so no polling loop is needed.
+    socat -u "PIPE:$WINSIZE_FIFO" "UNIX-CONNECT:$WINSIZE_SOCK,retry=100,interval=0.1" &
+
     # ── Launch QEMU ───────────────────────────────────────────────────
     qemu-system-${arch} \
       "''${KVM_ARGS[@]}" \
@@ -273,6 +328,9 @@ pkgs.writeShellApplication {
       -nographic \
       -serial mon:stdio \
       -serial file:"$RUNDIR/kernel.log" \
+      -device virtio-serial-pci \
+      -chardev "socket,id=winsize,path=$WINSIZE_SOCK,server=on,wait=off" \
+      -device virtserialport,chardev=winsize,name=llmjail.winsize \
       -no-reboot \
       -device virtio-rng-pci \
       -nic user,model=virtio-net-pci \

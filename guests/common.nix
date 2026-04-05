@@ -281,6 +281,39 @@
       '';
     };
 
+    # ── llmjail-winsize service ──────────────────────────────────────────
+    # Reads "cols rows" lines from a dedicated virtio-serial port
+    # (`llmjail.winsize`) published by the host runner and applies them to
+    # /dev/ttyS0 via stty. TIOCSWINSZ delivers SIGWINCH to ttyS0's foreground
+    # process group, so the TUI resizes live without any QEMU patches.
+    systemd.services.llmjail-winsize = {
+      description = "Apply terminal size updates from host via virtio-serial";
+      wantedBy = [ "multi-user.target" ];
+      before = [ "llmjail-tool.service" ];
+      after = [ "llmjail-mounts.service" ];
+      serviceConfig = {
+        Type = "simple";
+        # `always`, not `on-failure`: if the host bridge disconnects the
+        # read loop exits 0, and we still want the service back so the
+        # next reconnect delivers resizes.
+        Restart = "always";
+        RestartSec = "1s";
+      };
+      script = ''
+        set -eu
+        while [ ! -e /dev/virtio-ports/llmjail.winsize ]; do
+          sleep 0.1
+        done
+        PREV=""
+        while IFS=' ' read -r COLS ROWS; do
+          [ -n "$COLS" ] && [ -n "$ROWS" ] || continue
+          [ "$COLS $ROWS" = "$PREV" ] && continue
+          PREV="$COLS $ROWS"
+          ${pkgs.coreutils}/bin/stty cols "$COLS" rows "$ROWS" < /dev/ttyS0 2>/dev/null || true
+        done < /dev/virtio-ports/llmjail.winsize
+      '';
+    };
+
     # ── llmjail-tool service ────────────────────────────────────────────
     systemd.services.llmjail-tool = let
       launcher = pkgs.writeShellScript "launch-tool" ''
@@ -313,9 +346,12 @@
           done < /llmjail-env/tool-args
         fi
 
-        # Apply terminal dimensions to serial TTY so TUI apps render correctly
+        # Apply the initial terminal size synchronously BEFORE exec so the
+        # TUI sees a non-zero TIOCGWINSZ on first read. Dynamic resizes
+        # after this point are handled by the llmjail-winsize side-channel
+        # service. (stdin is /dev/ttyS0 via systemd TTYPath.)
         if [ -n "''${COLUMNS:-}" ] && [ -n "''${LINES:-}" ]; then
-          stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
+          ${pkgs.coreutils}/bin/stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
         fi
 
         cd /workspace

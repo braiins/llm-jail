@@ -52,6 +52,10 @@ let
             machine.succeed("systemctl cat llmjail-mounts.service")
             machine.succeed("systemctl cat llmjail-net-filter.service")
             machine.succeed("systemctl cat llmjail-tool.service")
+            machine.succeed("systemctl cat llmjail-winsize.service")
+
+        with subtest("winsize service is running"):
+            machine.succeed("systemctl is-active llmjail-winsize.service")
 
         with subtest("mounts service handles no-mounts case"):
             machine.succeed("systemctl is-active llmjail-mounts.service")
