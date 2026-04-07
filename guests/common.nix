@@ -18,18 +18,27 @@
     boot.loader.grub.enable = false;
     boot.kernelParams = [ "console=ttyS1" ];
     boot.initrd.availableKernelModules = [
-      "9p" "9pnet_virtio"
-      "virtio_pci" "virtio_blk" "virtio_net" "virtio_rng"
+      "9p"
+      "9pnet_virtio"
+      "virtio_pci"
+      "virtio_blk"
+      "virtio_net"
+      "virtio_rng"
       "overlay"
     ];
     boot.kernelModules = [ "nf_tables" ];
 
     boot.initrd.supportedFilesystems = [ "ext4" ];
 
-    # Mount nix store overlay in postMountCommands so we control ordering:
-    # store-disk (ext4 or tmpfs) MUST be mounted before the overlay, and
-    # postMountCommands runs after all neededForBoot fileSystems (including
-    # /nix/.ro-store) but before switch_root.
+    # Mount nix store overlay and nix/var in postMountCommands so we control
+    # ordering: the backing device (ext4 or tmpfs) MUST be mounted before the
+    # overlay, and postMountCommands runs after all neededForBoot fileSystems
+    # (including /.nix-lower/store) but before switch_root.
+    # The 9p mount is used directly as the overlay lower layer — overlayfs
+    # does not reliably cross submount boundaries, so the lower must be the
+    # mounted filesystem itself, not a parent directory containing it.
+    # /nix/var is bind-mounted from the backing so build artifacts
+    # (/nix/var/nix/builds/) land on the backing volume, not the root tmpfs.
     boot.initrd.postMountCommands = ''
       STORE_DISK=0
       for arg in $(cat /proc/cmdline); do
@@ -38,17 +47,20 @@
         esac
       done
 
-      mkdir -p $targetRoot/nix/.store-disk
+      mkdir -p $targetRoot/.nix-backing
       if [ "$STORE_DISK" = "1" ]; then
-        mount /dev/vda $targetRoot/nix/.store-disk
+        mount /dev/vda $targetRoot/.nix-backing
       else
-        mount -t tmpfs tmpfs $targetRoot/nix/.store-disk
+        mount -t tmpfs tmpfs $targetRoot/.nix-backing
       fi
-      mkdir -p $targetRoot/nix/.store-disk/upper $targetRoot/nix/.store-disk/work
+      mkdir -p $targetRoot/.nix-backing/store-upper $targetRoot/.nix-backing/store-work $targetRoot/.nix-backing/var
 
       mkdir -p $targetRoot/nix/store
       mount -t overlay overlay $targetRoot/nix/store \
-        -o "lowerdir=$targetRoot/nix/.ro-store,upperdir=$targetRoot/nix/.store-disk/upper,workdir=$targetRoot/nix/.store-disk/work"
+        -o "lowerdir=$targetRoot/.nix-lower/store,upperdir=$targetRoot/.nix-backing/store-upper,workdir=$targetRoot/.nix-backing/store-work"
+
+      mkdir -p $targetRoot/nix/var
+      mount --bind $targetRoot/.nix-backing/var $targetRoot/nix/var
     '';
 
     # ── Filesystems ───────────────────────────────────────────────────────
@@ -58,16 +70,17 @@
       options = [ "mode=0755" "size=2G" ];
     };
 
-    # Host nix store read-only (lower layer for the overlay mounted above)
-    fileSystems."/nix/.ro-store" = {
+    # Host nix store read-only (lower layer for the /nix/store overlay above).
+    # Mounted outside /nix so it isn't hidden when the overlay covers /nix/store.
+    fileSystems."/.nix-lower/store" = {
       device = "nix-store";
       fsType = "9p";
       options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "ro" ];
       neededForBoot = true;
     };
 
-    # /nix/store overlay is mounted in postMountCommands (above) to ensure
-    # the store-disk backing device is ready before the overlay is created.
+    # /nix/store overlay and /nix/var bind-mount are done in postMountCommands
+    # (above) to ensure the backing device is ready first.
 
     fileSystems."/llmjail-env" = {
       device = "envfs";
@@ -315,68 +328,70 @@
     };
 
     # ── llmjail-tool service ────────────────────────────────────────────
-    systemd.services.llmjail-tool = let
-      launcher = pkgs.writeShellScript "launch-tool" ''
-        set -euo pipefail
+    systemd.services.llmjail-tool =
+      let
+        launcher = pkgs.writeShellScript "launch-tool" ''
+          set -euo pipefail
 
-        # Add host packages to PATH if available (NixOS host)
-        if [ -d /host-user-sw/bin ]; then
-          export PATH="/host-user-sw/bin:$PATH"
-        fi
-        if [ -d /host-sw/bin ]; then
-          export PATH="/host-sw/bin:$PATH"
-        fi
+          # Add host packages to PATH if available (NixOS host)
+          if [ -d /host-user-sw/bin ]; then
+            export PATH="/host-user-sw/bin:$PATH"
+          fi
+          if [ -d /host-sw/bin ]; then
+            export PATH="/host-sw/bin:$PATH"
+          fi
 
-        # Source nix develop environment if available
-        if [ -f /llmjail-env/dev-env ]; then
-          # dev-env is output of `nix print-dev-env` — a bash script setting PATH, etc.
-          # shellcheck disable=SC1091
-          source /llmjail-env/dev-env
-        fi
+          # Source nix develop environment if available
+          if [ -f /llmjail-env/dev-env ]; then
+            # dev-env is output of `nix print-dev-env` — a bash script setting PATH, etc.
+            # shellcheck disable=SC1091
+            source /llmjail-env/dev-env
+          fi
 
-        ARGS=()
-        if [ "''${LLMJAIL_DANGEROUS:-0}" = "1" ]; then
-          ARGS+=(${config.llmjail.dangerousFlag})
-        fi
+          ARGS=()
+          if [ "''${LLMJAIL_DANGEROUS:-0}" = "1" ]; then
+            ARGS+=(${config.llmjail.dangerousFlag})
+          fi
 
-        # Read null-separated tool args preserving argument boundaries
-        if [ -s /llmjail-env/tool-args ]; then
-          while IFS= read -r -d "" arg; do
-            ARGS+=("$arg")
-          done < /llmjail-env/tool-args
-        fi
+          # Read null-separated tool args preserving argument boundaries
+          if [ -s /llmjail-env/tool-args ]; then
+            while IFS= read -r -d "" arg; do
+              ARGS+=("$arg")
+            done < /llmjail-env/tool-args
+          fi
 
-        # Apply the initial terminal size synchronously BEFORE exec so the
-        # TUI sees a non-zero TIOCGWINSZ on first read. Dynamic resizes
-        # after this point are handled by the llmjail-winsize side-channel
-        # service. (stdin is /dev/ttyS0 via systemd TTYPath.)
-        if [ -n "''${COLUMNS:-}" ] && [ -n "''${LINES:-}" ]; then
-          ${pkgs.coreutils}/bin/stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
-        fi
+          # Apply the initial terminal size synchronously BEFORE exec so the
+          # TUI sees a non-zero TIOCGWINSZ on first read. Dynamic resizes
+          # after this point are handled by the llmjail-winsize side-channel
+          # service. (stdin is /dev/ttyS0 via systemd TTYPath.)
+          if [ -n "''${COLUMNS:-}" ] && [ -n "''${LINES:-}" ]; then
+            ${pkgs.coreutils}/bin/stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
+          fi
 
-        cd /workspace
-        exec ${config.llmjail.toolBinary} "''${ARGS[@]}"
-      '';
-    in {
-      description = "llmjail tool runner";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "llmjail-mounts.service" "llmjail-net-filter.service" "network-online.target" ];
-      wants = [ "llmjail-mounts.service" "llmjail-net-filter.service" "network-online.target" ];
-      path = [ "/run/current-system/sw" ];
-      serviceConfig = {
-        User = "user";
-        WorkingDirectory = "/workspace";
-        EnvironmentFile = "/llmjail-env/env";
-        StandardInput = "tty";
-        StandardOutput = "tty";
-        StandardError = "tty";
-        TTYPath = "/dev/ttyS0";
-        TTYReset = true;
-        TTYVHangup = false;
-        ExecStart = "${launcher}";
-        ExecStopPost = "+${pkgs.systemd}/bin/systemctl poweroff --force --force";
+          cd /workspace
+          exec ${config.llmjail.toolBinary} "''${ARGS[@]}"
+        '';
+      in
+      {
+        description = "llmjail tool runner";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "llmjail-mounts.service" "llmjail-net-filter.service" "network-online.target" ];
+        wants = [ "llmjail-mounts.service" "llmjail-net-filter.service" "network-online.target" ];
+        path = [ "/run/current-system/sw" ];
+        serviceConfig = {
+          User = "user";
+          WorkingDirectory = "/workspace";
+          EnvironmentFile = "/llmjail-env/env";
+          StandardInput = "tty";
+          StandardOutput = "tty";
+          StandardError = "tty";
+          TTYPath = "/dev/ttyS0";
+          TTYReset = true;
+          TTYVHangup = false;
+          ExecStart = "${launcher}";
+          ExecStopPost = "+${pkgs.systemd}/bin/systemctl poweroff --force --force";
+        };
       };
-    };
 
     # ── Disable unnecessary services ─────────────────────────────────────
     # No getty on serial — tool service owns the TTY

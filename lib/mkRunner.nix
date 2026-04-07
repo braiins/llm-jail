@@ -46,7 +46,7 @@ pkgs.writeShellApplication {
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
       --dev-env             Capture nix develop environment from workspace flake
-      --store-disk SIZE     Create a disk-backed nix store overlay (SIZE in GB)
+      --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
       --allow-domain DOMAIN Add domain to network whitelist (repeatable)
       --no-net-filter       Disable network filtering (unrestricted access)
       --mem SIZE            Memory in MB (default: ${toString toolDefaults.mem})

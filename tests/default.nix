@@ -11,7 +11,7 @@ let
 
         # Override 9p filesystem entries from common.nix — the test framework
         # provides its own root and /nix/store via virtualisation options.
-        fileSystems."/nix/.ro-store" = lib.mkForce {
+        fileSystems."/.nix-lower/store" = lib.mkForce {
           device = "tmpfs";
           fsType = "tmpfs";
           options = [ "size=1M" ];
@@ -98,7 +98,7 @@ let
       imports = [ ../guests/claude.nix ];
       _module.args = { inherit nixpkgs claude-code codex-cli; };
 
-      fileSystems."/nix/.ro-store" = lib.mkForce {
+      fileSystems."/.nix-lower/store" = lib.mkForce {
         device = "tmpfs";
         fsType = "tmpfs";
         options = [ "size=1M" ];

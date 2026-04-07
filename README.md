@@ -50,7 +50,7 @@ llm-jail-{claude,codex} [options] [-- tool-args...]
 | `--mount PATH` | Extra read-write mount (repeatable) | — |
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | — |
 | `--dev-env` | Capture `nix develop` environment from workspace | off |
-| `--store-disk SIZE` | Create a disk-backed nix store overlay (SIZE in GB) | off |
+| `--store-disk SIZE` | Create a disk-backed /nix overlay (SIZE in GB) | off |
 | `--allow-domain DOMAIN` | Add domain to network whitelist (repeatable) | tool defaults |
 | `--no-net-filter` | Disable network filtering (unrestricted access) | filtering on |
 | `--mem SIZE` | VM memory in MB | 4096 |
@@ -175,7 +175,8 @@ Default allowed domains per tool:
 └──────────────────┬──────────────────────────┘
                    │ QEMU (direct kernel boot)
 ┌─ Guest (NixOS) ──┴──────────────────────────┐
-│  /nix/store ← 9p read-only from host        │
+│  /nix/store ← overlay (9p lower + disk/tmpfs) │
+│  /nix/var   ← bind from disk/tmpfs backing   │
 │  /workspace ← 9p read-write                 │
 │                                             │
 │  systemd                                    │
@@ -187,7 +188,7 @@ Default allowed domains per tool:
 └─────────────────────────────────────────────┘
 ```
 
-No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p with an overlay for any writes. When `--store-disk` is used, a sparse ext4 image is created for the overlay's upper layer instead of tmpfs, providing more space for `nix build` operations. The image is cleaned up automatically when the VM exits.
+No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
 
 ## Adding a new tool
 
