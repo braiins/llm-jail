@@ -5,7 +5,7 @@ let
     pkgs.testers.nixosTest {
       name = "llmjail-${name}-smoke";
 
-      nodes.machine = { config, lib, pkgs, ... }: {
+      nodes.machine = { lib, ... }: {
         imports = [ guestModule ];
         _module.args = { inherit nixpkgs claude-code codex-cli copilot-cli; };
 
@@ -94,7 +94,7 @@ let
   netFilterTest = pkgs.testers.nixosTest {
     name = "llmjail-net-filter-smoke";
 
-    nodes.machine = { config, lib, pkgs, ... }: {
+    nodes.machine = { lib, ... }: {
       imports = [ ../guests/claude.nix ];
       _module.args = { inherit nixpkgs claude-code codex-cli; };
 
