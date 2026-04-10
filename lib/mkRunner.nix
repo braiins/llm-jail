@@ -58,6 +58,19 @@ pkgs.writeShellApplication {
       exit 0
     }
 
+    CLEANUP_FUNCS=()
+    cleanup() {
+      local status=$?
+      local i
+
+      for (( i=''${#CLEANUP_FUNCS[@]}-1; i >= 0; i-- )); do
+        "''${CLEANUP_FUNCS[i]}" || true
+      done
+
+      exit "$status"
+    }
+    trap cleanup EXIT
+
     # ── Parse CLI ─────────────────────────────────────────────────────
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -79,12 +92,10 @@ pkgs.writeShellApplication {
 
     # ── Temp dir for env file ─────────────────────────────────────────
     RUNDIR="$(mktemp -d)"
-    WINCH_FWD_PID=""
-    cleanup() {
-      [ -n "$WINCH_FWD_PID" ] && kill "$WINCH_FWD_PID" 2>/dev/null
-      rm -rf "$RUNDIR"
+    cleanup_rundir() {
+      [ -d "$RUNDIR" ] && rm -rf "$RUNDIR"
     }
-    trap cleanup EXIT
+    CLEANUP_FUNCS+=(cleanup_rundir)
 
     # ── Terminal resize side channel ──────────────────────────────────
     # TODO: QEMU has a pending patch series (v6, "console: add
@@ -123,12 +134,32 @@ pkgs.writeShellApplication {
       }
       trap winsize_emit WINCH
       winsize_emit
+
+      # 'uninvoked function', but indirect call via trap
+      # shellcheck disable=SC2329
+      cleanup_sleep() {
+        if [ -n "''${SLEEP_PID:-}" ]; then
+          kill "$SLEEP_PID" 2>/dev/null || true
+          wait "$SLEEP_PID" 2>/dev/null || true
+        fi
+        exit
+      }
+      trap cleanup_sleep TERM
       while :; do
         sleep 86400 &
-        wait $! 2>/dev/null || true
+        SLEEP_PID=$!
+        # wait(2) is interrupted by WINCH traps. Keep waiting for the same
+        # sleep PID until it actually exits, otherwise we'd leak sleepers.
+        while kill -0 "$SLEEP_PID" 2>/dev/null; do
+          wait "$SLEEP_PID" 2>/dev/null || true
+        done
       done
     ) &
     WINCH_FWD_PID=$!
+    cleanup_winch() {
+      kill "$WINCH_FWD_PID" 2>/dev/null
+    }
+    CLEANUP_FUNCS+=(cleanup_winch)
 
     # ── Write env file ────────────────────────────────────────────────
     ENV_FILE="$RUNDIR/env"
@@ -338,7 +369,12 @@ pkgs.writeShellApplication {
     # ── Start the winsize bridge ───────────────────────────────────────
     # socat itself retries the UNIX-CONNECT until QEMU binds the socket,
     # so no polling loop is needed.
-    socat -u "PIPE:$WINSIZE_FIFO" "UNIX-CONNECT:$WINSIZE_SOCK,retry=100,interval=0.1" &
+    socat -u "PIPE:$WINSIZE_FIFO" "UNIX-CONNECT:$WINSIZE_SOCK,retry=100,interval=0.1" 2>/dev/null &
+    SOCAT_PID=$!
+    cleanup_socat() {
+      kill "$SOCAT_PID" 2>/dev/null
+    }
+    CLEANUP_FUNCS+=(cleanup_socat)
 
     # ── Launch QEMU ───────────────────────────────────────────────────
     qemu-system-${arch} \
