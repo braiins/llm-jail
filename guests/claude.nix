@@ -1,4 +1,4 @@
-{ config, lib, pkgs, claude-code, ... }:
+{ claude-code, ... }:
 
 {
   imports = [ ./common.nix ];

@@ -3,8 +3,6 @@
   copilot-cli,
   ...
 }:
-let
-in
 {
   imports = [
     ./common.nix

@@ -1,4 +1,4 @@
-{ config, lib, pkgs, codex-cli, ... }:
+{ pkgs, codex-cli, ... }:
 
 {
   imports = [ ./common.nix ];
