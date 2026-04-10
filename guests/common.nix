@@ -141,6 +141,13 @@
             ${pkgs.coreutils}/bin/mkdir -p "$mpath" "''${mpath}-upper/upper" "''${mpath}-upper/work"
             ${pkgs.util-linux}/bin/mount -t overlay overlay "$mpath" \
               -o "lowerdir=$tag,upperdir=''${mpath}-upper/upper,workdir=''${mpath}-upper/work"
+          elif [ "$mode" = "bind-rw-file" ]; then
+            echo "Bind-mounting file $tag -> $mpath (rw)"
+            parent="$(${pkgs.coreutils}/bin/dirname "$mpath")"
+            ${pkgs.coreutils}/bin/mkdir -p "$parent"
+            ${pkgs.coreutils}/bin/touch "$mpath"
+            ${pkgs.util-linux}/bin/mount --bind "$tag" "$mpath"
+            ${pkgs.util-linux}/bin/mount -o remount,bind,rw "$mpath"
           else
             echo "Mounting $tag -> $mpath ($mode)"
             ${pkgs.coreutils}/bin/mkdir -p "$mpath"

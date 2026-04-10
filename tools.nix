@@ -25,4 +25,29 @@
       ];
     };
   };
+  copilot = {
+    guestModule = ./guests/copilot.nix;
+    defaults = {
+      mem = 4096; vcpu = 2;
+      configDirName = ".copilot";
+      persistDirs = [
+        "logs"
+        "session-state"
+      ];
+      persistFiles = [
+        "command-history-state.json"
+      ];
+      allowedDomains = [
+        "github.com"
+        "api.github.com"
+        "api.individual.githubcopilot.com"
+        "copilot-proxy.githubusercontent.com"
+        "origin-tracker.githubusercontent.com"
+        "githubcopilot.com"
+        "copilot-telemetry.githubusercontent.com"
+        "collector.github.com"
+        "default.exp-tas.com"
+      ];
+    };
+  };
 }

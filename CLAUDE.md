@@ -38,7 +38,3 @@ This is a Nix flake that runs coding agents inside QEMU microVMs with hardware-l
 - **`/nix/store` uses an overlay; `/nix/var` is bind-mounted from the same backing.** By default both use a tmpfs at `/.nix-backing`. Use `--store-disk SIZE` to use a disk-backed ext4 image instead, giving space for large builds and intermediate artifacts in `/nix/var/nix/builds/`. Dev shell environments can alternatively be captured on the host via `nix print-dev-env` (opt-in with `--dev-env`) and sourced in the guest.
 - **The 9p store mount and overlay backing live outside `/nix`.** The host store is mounted read-only at `/.nix-lower/store` (used as the overlay lower layer directly — overlayfs does not reliably cross submount boundaries, so the lower must be the mounted filesystem itself). The overlay backing (ext4 or tmpfs) is at `/.nix-backing`. Keep this in mind when debugging mount issues inside the guest.
 - **Config dirs use a read-only overlay pattern.** `~/.claude` (and `~/.codex`) is mounted read-only as the lower layer of an overlayfs with a tmpfs upper, so writes to credentials/settings are ephemeral. Only subdirs listed in `persistDirs` in `tools.nix` get writable 9p mounts on top of the overlay. To persist a new subdir, add it to `persistDirs` — `mkRunner.nix` creates the host dir and adds the rw mount, and `common.nix` processes entries in order (ro 9p → overlay → rw 9p mounts).
-
-## Version Control
-
-This repo uses **jj (Jujutsu)**, not git directly. Use `jj st`, `jj diff`, `jj commit`, etc.

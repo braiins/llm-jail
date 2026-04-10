@@ -24,16 +24,20 @@ jobs:
       - name: Update codex-cli-nix
         run: nix flake update codex-cli-nix
 
+      - name: Update llm-agents.nix
+        run: nix flake update llm-agents
+
       - name: Create pull request
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
-          commit-message: "flake: update claude-code-nix and codex-cli-nix inputs"
-          title: "flake: update claude-code-nix and codex-cli-nix inputs"
+          commit-message: "flake: update claude-code-nix, codex-cli-nix, and llm-agents.nix inputs"
+          title: "flake: update claude-code-nix, codex-cli-nix, and llm-agents.nix inputs"
           body: |
             Automated daily update of flake inputs:
             - `claude-code-nix`
             - `codex-cli-nix`
+            - `llm-agents.nix`
           branch: auto-update-flake-inputs
           delete-branch: true
 
