@@ -29,6 +29,7 @@ pkgs.writeShellApplication {
     DANGEROUS=0
     DEV_ENV=0
     IMMUTABLE=0
+    LLMJAIL_TMPDIR=''${TMPDIR:-/tmp}
     STORE_DISK=0
     CONFIG_DIR="''${LLMJAIL_CONFIG_DIR:-$HOME/${toolDefaults.configDirName}}"
     NET_FILTER=1
@@ -45,6 +46,7 @@ pkgs.writeShellApplication {
       --dangerous           Enable the tool's dangerous / unattended mode
       --config-dir PATH     Tool config directory (default: ~/${toolDefaults.configDirName})
       --immutable           Mount workspace as read-only instead of read-write
+      --tmpdir PATH         Directory to use for runtime data (default: ''${TMPDIR:-/tmp})
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
       --dev-env             Capture nix develop environment from workspace flake
@@ -81,6 +83,7 @@ pkgs.writeShellApplication {
         --config-dir)  CONFIG_DIR="$2"; shift 2 ;;
         --mount)       EXTRA_MOUNTS+=("$2:rw"); shift 2 ;;
         --ro-mount)    EXTRA_MOUNTS+=("$2:ro"); shift 2 ;;
+        --tmpdir)      LLMJAIL_TMPDIR="$2"; shift 2 ;;
         --immutable)    IMMUTABLE=1; shift ;;
         --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
         --no-net-filter) NET_FILTER=0; shift ;;
@@ -93,8 +96,12 @@ pkgs.writeShellApplication {
       esac
     done
 
-    # ── Temp dir for env file ─────────────────────────────────────────
-    RUNDIR="$(mktemp -d)"
+    if [ ! -d "$LLMJAIL_TMPDIR" ]; then
+      echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
+      exit 1
+    fi
+    RUNDIR=$(mktemp -d --tmpdir="$LLMJAIL_TMPDIR")
+
     cleanup_rundir() {
       [ -d "$RUNDIR" ] && rm -rf "$RUNDIR"
     }
