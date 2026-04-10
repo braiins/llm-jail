@@ -255,6 +255,29 @@ pkgs.writeShellApplication {
       '') toolDefaults.persistDirs
     )}
 
+    # Mount full config dir RW at a root-only path as source for per-file RW binds.
+    ${pkgs.lib.optionalString (toolDefaults.persistFiles or [ ] != [ ]) ''
+      add_mount "$CONFIG_DIR" "/root/.llmjail-${toolDefaults.configDirName}-rw-src" "rw"
+    ''}
+
+    # Mount persist files RW from the hidden RW source onto the user-visible overlay.
+    ${builtins.concatStringsSep "\n" (
+      map (file:
+        let
+          dir = dirOf file;
+        in
+        ''
+          mkdir -p "$CONFIG_DIR/${dir}"
+          touch "$CONFIG_DIR/${file}"
+          if [ -n "$MOUNT_CMDLINE" ]; then
+            MOUNT_CMDLINE="$MOUNT_CMDLINE,/root/.llmjail-${toolDefaults.configDirName}-rw-src/${file}:/home/user/${toolDefaults.configDirName}/${file}:bind-rw-file"
+          else
+            MOUNT_CMDLINE="/root/.llmjail-${toolDefaults.configDirName}-rw-src/${file}:/home/user/${toolDefaults.configDirName}/${file}:bind-rw-file"
+          fi
+        ''
+      ) (toolDefaults.persistFiles or [ ])
+    )}
+
     # Copy individual config files into envfs share (9p can't mount single files)
     CONFIG_JSON="''${CONFIG_DIR%/${toolDefaults.configDirName}}/${toolDefaults.configDirName}.json"
     for src in "$CONFIG_JSON" "$HOME/.gitconfig"; do
