@@ -51,6 +51,7 @@ llm-jail-{claude,codex,copilot} [options] [-- tool-args...]
 |------|-------------|---------|
 | `--dangerous` | Enable the tool's dangerous / unattended mode | off |
 | `--config-dir PATH` | Tool config directory | `~/.claude` or `~/.codex` |
+| `--immutable` | Mount workspace as read-only | off |
 | `--mount PATH` | Extra read-write mount (repeatable) | — |
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | — |
 | `--dev-env` | Capture `nix develop` environment from workspace | off |
