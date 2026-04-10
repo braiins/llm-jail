@@ -91,9 +91,19 @@
 
     # ── Networking ────────────────────────────────────────────────────────
     networking.useDHCP = false;
-    networking.interfaces.eth0.useDHCP = true;
     networking.nameservers = [ "10.0.2.3" ];
     networking.firewall.enable = false;
+
+    # Gives interface name "eth0"
+    networking.usePredictableInterfaceNames = false;
+    systemd.network = {
+      enable = true;
+      networks."eth0" = {
+        matchConfig.Name = "eth0";
+        networkConfig.DHCP = "yes";
+      };
+      wait-online.enable = true;
+    };
 
     # ── User ──────────────────────────────────────────────────────────────
     users.users.user = {
@@ -416,7 +426,6 @@
     # runner script exists, preventing stale 9p cache hits on GC'd paths.
     nix.registry.nixpkgs.flake = nixpkgs;
     nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-    systemd.services.systemd-networkd-wait-online.enable = false;
 
     system.stateVersion = "24.11";
   };
