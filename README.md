@@ -8,13 +8,14 @@ Supported tools:
 |------|---------------|----------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `llm-jail-claude` | `--dangerously-skip-permissions` |
 | [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
 
 ## Requirements
 
 - Linux (x86_64 or aarch64)
 - [Nix](https://nixos.org/) with flakes enabled
 - KVM access recommended (falls back to emulation without it)
-- Valid credentials for your chosen tool (`~/.claude` or `~/.codex`)
+- Valid credentials for your chosen tool (`~/.claude`, `~/.codex`, or `~/.copilot`)
 
 ## Quick start
 
@@ -27,6 +28,9 @@ nix run github:braiins/llm-jail#claude -- --dangerous
 
 # Run Codex
 nix run github:braiins/llm-jail#codex
+
+# Run GitHub Copilot CLI
+nix run github:braiins/llm-jail#copilot
 ```
 
 Pass tool arguments after `--`:
@@ -38,7 +42,7 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 ## Usage
 
 ```
-llm-jail-{claude,codex} [options] [-- tool-args...]
+llm-jail-{claude,codex,copilot} [options] [-- tool-args...]
 ```
 
 ### Options
@@ -108,7 +112,7 @@ nix run .#claude -- --store-disk 20 -- -p "nix build and run the tests"
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
 
 - The current working directory → `/workspace` (read-write)
-- The tool config directory → `/home/user/.claude` or `.codex` (read-only overlay with writable persist dirs)
+- The tool config directory → `/home/user/.claude`, `.codex`, or `.copilot` (read-only overlay with writable persist dirs)
 - `~/.gitconfig` and the tool's JSON config are copied in (9p cannot mount single files)
 - Host system and user packages → `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
@@ -140,7 +144,8 @@ Default allowed domains per tool:
 | Tool | Domains |
 |------|---------|
 | Claude | `api.anthropic.com`, `statsig.anthropic.com`, `sentry.io` |
-| Codex | `api.openai.com`, `sentry.io` |
+| Codex | `api.openai.com`, `chatgpt.com`, `sentry.io` |
+| Copilot | `github.com`, `api.github.com`, `api.individual.githubcopilot.com`, `copilot-proxy.githubusercontent.com`, `githubcopilot.com`, `collector.github.com`, … |
 
 > [!NOTE]
 > DNS-based filtering prevents the agent from resolving non-whitelisted domains, but does not prevent connections to hardcoded IP addresses on ports 80/443. This is adequate for preventing accidental or prompt-injected exfiltration by LLM agents, which use domain names rather than raw IPs.
@@ -148,7 +153,7 @@ Default allowed domains per tool:
 ## Dangerous mode
 
 > [!CAUTION]
-> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
+> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex, `--yolo` for Copilot). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
 >
 > Network filtering remains active in dangerous mode — the agent can only reach whitelisted domains. To grant unrestricted network access, use `--no-net-filter` (this is independent of `--dangerous`).
 >
@@ -182,7 +187,7 @@ Default allowed domains per tool:
 │  systemd                                    │
 │    → llmjail-mounts: mount 9p shares        │
 │    → llmjail-net-filter: dnsmasq + nftables │
-│    → llmjail-tool: exec claude/codex        │
+│    → llmjail-tool: exec claude/codex/copilot │
 │                                             │
 │  ExecStopPost: poweroff when tool exits     │
 └─────────────────────────────────────────────┘
