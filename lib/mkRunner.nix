@@ -100,6 +100,26 @@ pkgs.writeShellApplication {
       echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
       exit 1
     fi
+
+    # Paths used in virtfs option strings (comma-separated) and kernel cmdline
+    # (space-separated) cannot contain commas, spaces, or colons (mount spec delimiter).
+    validate_path() {
+      local path="$1" label="''${2:-path}"
+      if [[ "$path" == *,* ]]; then
+        echo "ERROR: $label must not contain commas: $path" >&2
+        exit 1
+      fi
+      if [[ "$path" == *\ * ]]; then
+        echo "ERROR: $label must not contain spaces: $path" >&2
+        exit 1
+      fi
+      if [[ "$path" == *:* ]]; then
+        echo "ERROR: $label must not contain colons: $path" >&2
+        exit 1
+      fi
+    }
+
+    validate_path "$LLMJAIL_TMPDIR" "tmpdir"
     RUNDIR=$(mktemp -d --tmpdir="$LLMJAIL_TMPDIR")
 
     cleanup_rundir() {
@@ -274,13 +294,14 @@ pkgs.writeShellApplication {
     }
 
     # Default mounts
+    validate_path "$(pwd)" "workspace path"
     if [[ "$IMMUTABLE" -eq 1 ]]; then
       add_mount "$(pwd)" "/workspace" "ro-nocache"
     else
       add_mount "$(pwd)" "/workspace" "rw"
     fi
 
-
+    validate_path "$CONFIG_DIR" "config directory"
     # Mount config dir read-only with no cache (overlay lower layer)
     # cache=none ensures host-side credential refreshes are visible instantly
     add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}-ro" "ro-nocache"
@@ -350,6 +371,7 @@ pkgs.writeShellApplication {
         echo "ERROR: mount path does not exist or is not a directory: $hostpath" >&2
         exit 1
       fi
+      validate_path "$hostpath" "mount path"
       add_mount "$hostpath" "$hostpath" "$mode"
     done
 
