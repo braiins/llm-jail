@@ -265,10 +265,11 @@
           # Populated by dnsmasq --nftset on each successful DNS resolution.
           # HTTP/HTTPS is only allowed to IPs that appear here, blocking
           # direct hardcoded-IP connections that bypass DNS filtering.
+          # Plain set (no `flags interval`) so dnsmasq can add individual
+          # /32 entries — interval sets reject single addresses in some
+          # nft/dnsmasq combos.
           set allowed_ips {
             type ipv4_addr
-            flags interval
-            auto-merge
           }
 
           chain output {
@@ -318,9 +319,17 @@
         } > "$DNSMASQ_CONF"
 
         # ── Start dnsmasq ───────────────────────────────────────────
+        # --user=root keeps CAP_NET_ADMIN for the lifetime of the daemon;
+        # dnsmasq otherwise drops to "nobody" and nftset updates fail
+        # silently. We're inside a jail VM, root for dnsmasq is fine.
+        # --log-queries surfaces the nftset add events in journalctl so
+        # future filter regressions are debuggable from the guest.
         ${pkgs.dnsmasq}/bin/dnsmasq \
           --conf-file="$DNSMASQ_CONF" \
-          --pid-file=/run/dnsmasq-llmjail.pid
+          --pid-file=/run/dnsmasq-llmjail.pid \
+          --user=root \
+          --log-queries=extra \
+          --log-facility=-
 
         # ── Point resolv.conf at local dnsmasq ──────────────────────
         echo "nameserver 127.0.0.1" > /etc/resolv.conf
