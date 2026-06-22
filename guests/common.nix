@@ -99,6 +99,13 @@
     networking.nameservers = [ "10.0.2.3" ];
     networking.firewall.enable = false;
 
+    # nixos-26.05 + systemd-networkd auto-enables resolved, which inserts
+    # "resolve" before "dns" in nsswitch and steals all hostname lookups
+    # to its own stub on 127.0.0.53/54. That bypasses our dnsmasq on
+    # 127.0.0.1, so nftset additions never happen. Force it off so glibc
+    # falls back to the "dns" NSS module and reads /etc/resolv.conf.
+    services.resolved.enable = false;
+
     # Gives interface name "eth0"
     networking.usePredictableInterfaceNames = false;
     systemd.network = {
