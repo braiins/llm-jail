@@ -16,6 +16,11 @@
   config = {
     # ── Boot ──────────────────────────────────────────────────────────────
     boot.loader.grub.enable = false;
+    # postMountCommands below is classic stage 1 only — assert against the
+    # systemd-stage-1 default that newer nixpkgs (26.05+) flips on. Until we
+    # port the /nix/store overlay setup to a systemd-initrd service, force
+    # classic.
+    boot.initrd.systemd.enable = lib.mkForce false;
     boot.kernelParams = [ "console=ttyS1" ];
     boot.initrd.availableKernelModules = [
       "9p"
