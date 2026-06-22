@@ -365,14 +365,6 @@ pkgs.writeShellApplication {
         cp "$src" "$RUNDIR/$(basename "$src")"
       fi
     done
-    # Tool-specific extra dotfiles (e.g. shell rc files for the shell tool)
-    ${builtins.concatStringsSep "\n" (
-      map (f: ''
-        if [ -f "$HOME/${f}" ]; then
-          cp "$HOME/${f}" "$RUNDIR/${f}"
-        fi
-      '') (toolDefaults.extraDotfiles or [ ])
-    )}
     # SSH directory is NOT mounted by default — use --ro-mount ~/.ssh if needed
 
     # Mount host packages if available (NixOS host)

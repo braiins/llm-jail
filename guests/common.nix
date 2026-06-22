@@ -4,8 +4,8 @@
   # ── Tool options (set by each guest module) ─────────────────────────────
   options.llmjail = {
     toolBinary = lib.mkOption {
-      type = lib.types.str;
-      description = "Path to the tool binary to exec in the guest";
+      type = lib.types.either lib.types.str lib.types.package;
+      description = "Path to the tool binary to exec in the guest (string or derivation)";
     };
     dangerousFlag = lib.mkOption {
       type = lib.types.str;
