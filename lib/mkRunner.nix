@@ -201,6 +201,16 @@ pkgs.writeShellApplication {
         fi
       done
 
+      # Forward host shell (resolved through symlinks so the /nix/store path
+      # is exposed, which the guest can reach via the 9p store mount even
+      # though /run/current-system/sw is remapped to /host-sw).
+      if [ -n "''${SHELL:-}" ]; then
+        RESOLVED_SHELL=$(readlink -f "$SHELL" 2>/dev/null || true)
+        if [ -n "$RESOLVED_SHELL" ]; then
+          echo "SHELL=\"$RESOLVED_SHELL\""
+        fi
+      fi
+
       # Forward AWS variables
       env | grep '^AWS_' || true
 
@@ -302,6 +312,9 @@ pkgs.writeShellApplication {
     fi
 
     validate_path "$CONFIG_DIR" "config directory"
+    # Ensure the config dir exists even when persistDirs is empty — 9p refuses
+    # to share a non-existent path.
+    mkdir -p "$CONFIG_DIR"
     # Mount config dir read-only with no cache (overlay lower layer)
     # cache=none ensures host-side credential refreshes are visible instantly
     add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}-ro" "ro-nocache"
@@ -352,6 +365,14 @@ pkgs.writeShellApplication {
         cp "$src" "$RUNDIR/$(basename "$src")"
       fi
     done
+    # Tool-specific extra dotfiles (e.g. shell rc files for the shell tool)
+    ${builtins.concatStringsSep "\n" (
+      map (f: ''
+        if [ -f "$HOME/${f}" ]; then
+          cp "$HOME/${f}" "$RUNDIR/${f}"
+        fi
+      '') (toolDefaults.extraDotfiles or [ ])
+    )}
     # SSH directory is NOT mounted by default — use --ro-mount ~/.ssh if needed
 
     # Mount host packages if available (NixOS host)
