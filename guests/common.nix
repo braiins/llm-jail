@@ -252,36 +252,20 @@
           exit 0
         fi
 
-        # ── Generate dnsmasq config ─────────────────────────────────
-        DNSMASQ_CONF="/etc/dnsmasq-llmjail.conf"
-        {
-          echo "no-resolv"
-          echo "no-hosts"
-          echo "listen-address=127.0.0.1"
-          echo "bind-interfaces"
-
-          # Forward allowed domains to QEMU's DNS
-          if [ -f /llmjail-env/allowed-domains ]; then
-            while IFS= read -r domain || [ -n "$domain" ]; do
-              [ -z "$domain" ] && continue
-              echo "server=/$domain/10.0.2.3"
-            done < /llmjail-env/allowed-domains
-          fi
-
-          # No default upstream — unmatched queries get REFUSED
-        } > "$DNSMASQ_CONF"
-
-        # ── Start dnsmasq ───────────────────────────────────────────
-        ${pkgs.dnsmasq}/bin/dnsmasq \
-          --conf-file="$DNSMASQ_CONF" \
-          --pid-file=/run/dnsmasq-llmjail.pid
-
-        # ── Point resolv.conf at local dnsmasq ──────────────────────
-        echo "nameserver 127.0.0.1" > /etc/resolv.conf
-
         # ── Apply nftables firewall rules ───────────────────────────
+        # Must run before dnsmasq so allowed_ips set exists when
+        # dnsmasq populates it on first DNS resolution.
         ${pkgs.nftables}/bin/nft -f - <<'NFTEOF'
         table inet llmjail_filter {
+          # Populated by dnsmasq --nftset on each successful DNS resolution.
+          # HTTP/HTTPS is only allowed to IPs that appear here, blocking
+          # direct hardcoded-IP connections that bypass DNS filtering.
+          set allowed_ips {
+            type ipv4_addr
+            flags interval
+            auto-merge
+          }
+
           chain output {
             type filter hook output priority 0; policy drop;
 
@@ -298,14 +282,43 @@
             ip daddr 10.0.2.3 udp dport 53 accept
             ip daddr 10.0.2.3 tcp dport 53 accept
 
-            # Allow outbound HTTP/HTTPS
-            tcp dport { 80, 443 } accept
+            # Allow outbound HTTP/HTTPS only to DNS-resolved allowed IPs
+            ip daddr @allowed_ips tcp dport { 80, 443 } accept
 
             # Drop everything else
             log prefix "llmjail-drop: " drop
           }
         }
         NFTEOF
+
+        # ── Generate dnsmasq config ─────────────────────────────────
+        DNSMASQ_CONF="/etc/dnsmasq-llmjail.conf"
+        {
+          echo "no-resolv"
+          echo "no-hosts"
+          echo "listen-address=127.0.0.1"
+          echo "bind-interfaces"
+
+          # Forward allowed domains to QEMU's DNS; populate nftables set
+          # on each successful resolution so the IP becomes reachable.
+          if [ -f /llmjail-env/allowed-domains ]; then
+            while IFS= read -r domain || [ -n "$domain" ]; do
+              [ -z "$domain" ] && continue
+              echo "server=/$domain/10.0.2.3"
+              echo "nftset=/$domain/4#inet#llmjail_filter#allowed_ips"
+            done < /llmjail-env/allowed-domains
+          fi
+
+          # No default upstream — unmatched queries get REFUSED
+        } > "$DNSMASQ_CONF"
+
+        # ── Start dnsmasq ───────────────────────────────────────────
+        ${pkgs.dnsmasq}/bin/dnsmasq \
+          --conf-file="$DNSMASQ_CONF" \
+          --pid-file=/run/dnsmasq-llmjail.pid
+
+        # ── Point resolv.conf at local dnsmasq ──────────────────────
+        echo "nameserver 127.0.0.1" > /etc/resolv.conf
 
         echo "Network filtering enabled with $(${pkgs.coreutils}/bin/wc -l < /llmjail-env/allowed-domains) allowed domain(s)."
       '';
