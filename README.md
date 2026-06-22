@@ -9,6 +9,7 @@ Supported tools:
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `llm-jail-claude` | `--dangerously-skip-permissions` |
 | [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
+| Interactive shell (debugging) | `llm-jail-shell` | — |
 
 ## Requirements
 
@@ -31,6 +32,9 @@ nix run github:braiins/llm-jail#codex
 
 # Run GitHub Copilot CLI
 nix run github:braiins/llm-jail#copilot
+
+# Drop into a shell inside the sandbox (for debugging the jail itself)
+nix run github:braiins/llm-jail#shell
 ```
 
 Pass tool arguments after `--`:
@@ -42,7 +46,7 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 ## Usage
 
 ```
-llm-jail-{claude,codex,copilot} [options] [-- tool-args...]
+llm-jail-{claude,codex,copilot,shell} [options] [-- tool-args...]
 ```
 
 ### Options
@@ -108,6 +112,16 @@ Run `nix build` inside the VM with extra storage (root tmpfs is only 2G):
 ```bash
 nix run .#claude -- --store-disk 20 -- -p "nix build and run the tests"
 ```
+
+Drop into your own shell inside the sandbox to inspect mounts or reproduce tool behavior manually:
+
+```bash
+nix run .#shell                              # offline, your shell rc files copied in
+nix run .#shell -- --allow-domain github.com # opt in to specific domains
+nix run .#shell -- --no-net-filter           # full network for debugging
+```
+
+The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` path is used) and falls back to zsh or bash if the host shell isn't reachable inside the guest (e.g. on non-NixOS hosts). The following dotfiles are copied from `$HOME` if they exist: `.bashrc`, `.bash_profile`, `.bash_logout`, `.profile`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.inputrc`. Any rc-file references to host-only paths (plugin managers in `~/.zsh/plugins`, etc.) will produce startup errors; bring those in with `--ro-mount` as needed.
 
 ## What's isolated
 
