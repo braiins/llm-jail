@@ -150,7 +150,7 @@ Default allowed domains per tool:
 | Copilot | `github.com`, `api.github.com`, `api.individual.githubcopilot.com`, `copilot-proxy.githubusercontent.com`, `githubcopilot.com`, `collector.github.com`, … |
 
 > [!NOTE]
-> DNS-based filtering prevents the agent from resolving non-whitelisted domains, but does not prevent connections to hardcoded IP addresses on ports 80/443. This is adequate for preventing accidental or prompt-injected exfiltration by LLM agents, which use domain names rather than raw IPs.
+> Outbound HTTP/HTTPS is restricted to IPs that the guest's dnsmasq resolved through a whitelisted domain — every successful lookup populates an nftables set (`allowed_ips`), and the firewall only accepts packets whose destination is in that set. Connections to hardcoded IPs that bypass DNS hit the default drop. IPv6 outbound traffic is dropped outright (no IPv6 rules). This is robust against accidental or prompt-injected exfiltration as long as the whitelisted domains themselves aren't bidirectional data channels — see the dangerous-mode warning below.
 
 ## Dangerous mode
 
