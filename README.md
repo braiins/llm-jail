@@ -211,6 +211,22 @@ Default allowed domains per tool:
 
 No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
 
+## Overriding tool packages
+
+Each runner is built with `lib.makeOverridable`, so the underlying tool package (`claude-code`, `codex-cli`, `copilot-cli`) can be swapped without forking the flake:
+
+```nix
+# flake.nix (consumer)
+let
+  llm-jail = inputs.llm-jail.packages.${system};
+in
+  llm-jail.claude.override {
+    claude-code = my-pinned-claude-code;
+  }
+```
+
+Useful for pinning a specific tool version, applying local patches, or testing an unreleased build.
+
 ## Adding a new tool
 
 1. Add a guest module under `guests/` (import `common.nix`, set `llmjail.toolBinary` and `llmjail.dangerousFlag`).
