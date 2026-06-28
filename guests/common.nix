@@ -242,6 +242,52 @@
           fi
         done
 
+        # ── Apply --mask patterns to user-data roots ────────────────
+        # Bind-mounts an empty dir/file over each matched path so the
+        # tool sees no contents (the name stays visible, only contents
+        # are hidden). Static: applied once at boot. New files matching
+        # the pattern after boot are NOT masked.
+        if [ -s /llmjail-env/mask-patterns ] && [ -s /llmjail-env/mask-roots ]; then
+          ${pkgs.coreutils}/bin/mkdir -p /run/llmjail-mask/empty-dir
+          : > /run/llmjail-mask/empty-file
+          ${pkgs.coreutils}/bin/chmod 0555 /run/llmjail-mask/empty-dir
+          ${pkgs.coreutils}/bin/chmod 0444 /run/llmjail-mask/empty-file
+
+          while IFS= read -r root || [ -n "$root" ]; do
+            [ -z "$root" ] && continue
+            [ -d "$root" ] || continue
+
+            EXPR=()
+            while IFS= read -r p || [ -n "$p" ]; do
+              [ -z "$p" ] && continue
+              if [ ''${#EXPR[@]} -gt 0 ]; then EXPR+=("-o"); fi
+              case "$p" in
+                */*) EXPR+=("-path" "$root/$p") ;;
+                *)   EXPR+=("-name" "$p") ;;
+              esac
+            done < /llmjail-env/mask-patterns
+
+            [ ''${#EXPR[@]} -eq 0 ] && continue
+
+            # -xdev keeps the walk inside the root's filesystem (the
+            # 9p mount), so we never wander into nested mounts.
+            # -prune skips descent into matched dirs (cheap on big trees).
+            ${pkgs.findutils}/bin/find "$root" -xdev \( "''${EXPR[@]}" \) -prune -print0 |
+              while IFS= read -r -d "" target; do
+                [ "$target" = "$root" ] && continue
+                if [ -d "$target" ]; then
+                  ${pkgs.util-linux}/bin/mount --bind /run/llmjail-mask/empty-dir "$target"
+                elif [ -e "$target" ]; then
+                  ${pkgs.util-linux}/bin/mount --bind /run/llmjail-mask/empty-file "$target"
+                else
+                  continue
+                fi
+                ${pkgs.util-linux}/bin/mount -o remount,bind,ro "$target"
+                echo "masked: $target"
+              done
+          done < /llmjail-env/mask-roots
+        fi
+
       '';
     };
 

@@ -35,6 +35,7 @@ pkgs.writeShellApplication {
     NET_FILTER=1
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
+    MASK_PATTERNS=()
     TOOL_ARGS=()
 
     # ── Usage ─────────────────────────────────────────────────────────
@@ -49,6 +50,12 @@ pkgs.writeShellApplication {
       --tmpdir PATH         Directory to use for runtime data (default: ''${TMPDIR:-/tmp})
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
+      --mask GLOB           Mask paths matching GLOB in workspace/mounts (repeatable).
+                            GLOB with '/' uses -path "<root>/GLOB" (matches across
+                            subdirs, e.g. 'a/*' also hits 'a/b/c'); else -name GLOB.
+                            Matched paths appear empty and read-only; the name stays
+                            visible, only the contents are hidden.
+                            Applied at boot only; new matches post-boot are not masked.
       --dev-env             Capture nix develop environment from workspace flake
       --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
       --allow-domain DOMAIN Add domain to network whitelist (repeatable)
@@ -87,6 +94,7 @@ pkgs.writeShellApplication {
         --immutable)    IMMUTABLE=1; shift ;;
         --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
         --no-net-filter) NET_FILTER=0; shift ;;
+        --mask)        MASK_PATTERNS+=("$2"); shift 2 ;;
         --store-disk)  STORE_DISK="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
         --vcpu)        VCPU="$2"; shift 2 ;;
@@ -284,6 +292,7 @@ pkgs.writeShellApplication {
     MOUNT_IDX=0
     MOUNT_CMDLINE=""
     VIRTFS_ARGS=()
+    MASK_ROOTS=()
 
     add_mount() {
       local hostpath="$1" guestpath="$2" mode="$3"
@@ -310,6 +319,7 @@ pkgs.writeShellApplication {
     else
       add_mount "$(pwd)" "/workspace" "rw"
     fi
+    MASK_ROOTS+=("/workspace")
 
     validate_path "$CONFIG_DIR" "config directory"
     # Ensure the config dir exists even when persistDirs is empty — 9p refuses
@@ -386,7 +396,25 @@ pkgs.writeShellApplication {
       fi
       validate_path "$hostpath" "mount path"
       add_mount "$hostpath" "$hostpath" "$mode"
+      MASK_ROOTS+=("$hostpath")
     done
+
+    # ── Mask patterns ────────────────────────────────────────────────
+    for p in "''${MASK_PATTERNS[@]+"''${MASK_PATTERNS[@]}"}"; do
+      case "$p" in
+        *$'\n'*) echo "ERROR: --mask must not contain newlines: $p" >&2; exit 1 ;;
+      esac
+    done
+    if [ ''${#MASK_PATTERNS[@]} -gt 0 ]; then
+      printf '%s\n' "''${MASK_PATTERNS[@]}" > "$RUNDIR/mask-patterns"
+    else
+      : > "$RUNDIR/mask-patterns"
+    fi
+    if [ ''${#MASK_ROOTS[@]} -gt 0 ]; then
+      printf '%s\n' "''${MASK_ROOTS[@]}" > "$RUNDIR/mask-roots"
+    else
+      : > "$RUNDIR/mask-roots"
+    fi
 
     # ── Kernel command line ───────────────────────────────────────────
     KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"
