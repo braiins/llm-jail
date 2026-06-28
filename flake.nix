@@ -18,25 +18,30 @@
       mkTool = system: toolName: toolDef:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          claude-code = claude-code-nix.packages.${system}.default;
-          codex-cli = codex-cli-nix.packages.${system}.default;
-          copilot-cli = llm-agents.packages.${system}.copilot-cli;
-
-          guest = nixpkgs.lib.nixosSystem {
-            inherit system;
-            specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli; };
-            modules = [
-              toolDef.guestModule
-              { nixpkgs.config.allowUnfree = true; }
-            ];
+          # Default tool packages — overridable via `.override { claude-code = ...; }`
+          # on the resulting runner derivation. Consumers can swap any of these
+          # without forking the flake.
+          defaultArgs = {
+            claude-code = claude-code-nix.packages.${system}.default;
+            codex-cli = codex-cli-nix.packages.${system}.default;
+            copilot-cli = llm-agents.packages.${system}.copilot-cli;
           };
-
-          runner = import ./lib/mkRunner.nix {
+        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli }:
+          let
+            guest = nixpkgs.lib.nixosSystem {
+              inherit system;
+              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli; };
+              modules = [
+                toolDef.guestModule
+                { nixpkgs.config.allowUnfree = true; }
+              ];
+            };
+          in import ./lib/mkRunner.nix {
             inherit pkgs guest;
             name = toolName;
             toolDefaults = toolDef.defaults;
-          };
-        in runner;
+          }
+        ) defaultArgs;
 
     in {
       packages = forAllSystems (system:

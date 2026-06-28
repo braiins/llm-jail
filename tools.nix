@@ -25,6 +25,28 @@
       ];
     };
   };
+  shell = {
+    guestModule = ./guests/shell.nix;
+    defaults = {
+      mem = 2048; vcpu = 2;
+      configDirName = ".llmjail-shell";
+      persistDirs = [ ];
+      # No domains whitelisted by default — debug shell runs offline unless
+      # the user opts in with --allow-domain or --no-net-filter.
+      allowedDomains = [ ];
+      extraDotfiles = [
+        ".bashrc"
+        ".bash_profile"
+        ".bash_logout"
+        ".profile"
+        ".zshrc"
+        ".zshenv"
+        ".zprofile"
+        ".zlogin"
+        ".inputrc"
+      ];
+    };
+  };
   copilot = {
     guestModule = ./guests/copilot.nix;
     defaults = {

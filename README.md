@@ -9,6 +9,7 @@ Supported tools:
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `llm-jail-claude` | `--dangerously-skip-permissions` |
 | [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
+| Interactive shell (debugging) | `llm-jail-shell` | — |
 
 ## Requirements
 
@@ -31,6 +32,9 @@ nix run github:braiins/llm-jail#codex
 
 # Run GitHub Copilot CLI
 nix run github:braiins/llm-jail#copilot
+
+# Drop into a shell inside the sandbox (for debugging the jail itself)
+nix run github:braiins/llm-jail#shell
 ```
 
 Pass tool arguments after `--`:
@@ -42,7 +46,7 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 ## Usage
 
 ```
-llm-jail-{claude,codex,copilot} [options] [-- tool-args...]
+llm-jail-{claude,codex,copilot,shell} [options] [-- tool-args...]
 ```
 
 ### Options
@@ -109,6 +113,16 @@ Run `nix build` inside the VM with extra storage (root tmpfs is only 2G):
 nix run .#claude -- --store-disk 20 -- -p "nix build and run the tests"
 ```
 
+Drop into your own shell inside the sandbox to inspect mounts or reproduce tool behavior manually:
+
+```bash
+nix run .#shell                              # offline, your shell rc files copied in
+nix run .#shell -- --allow-domain github.com # opt in to specific domains
+nix run .#shell -- --no-net-filter           # full network for debugging
+```
+
+The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` path is used) and falls back to zsh or bash if the host shell isn't reachable inside the guest (e.g. on non-NixOS hosts). The following dotfiles are copied from `$HOME` if they exist: `.bashrc`, `.bash_profile`, `.bash_logout`, `.profile`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.inputrc`. Any rc-file references to host-only paths (plugin managers in `~/.zsh/plugins`, etc.) will produce startup errors; bring those in with `--ro-mount` as needed.
+
 ## What's isolated
 
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
@@ -150,7 +164,7 @@ Default allowed domains per tool:
 | Copilot | `github.com`, `api.github.com`, `api.individual.githubcopilot.com`, `copilot-proxy.githubusercontent.com`, `githubcopilot.com`, `collector.github.com`, … |
 
 > [!NOTE]
-> DNS-based filtering prevents the agent from resolving non-whitelisted domains, but does not prevent connections to hardcoded IP addresses on ports 80/443. This is adequate for preventing accidental or prompt-injected exfiltration by LLM agents, which use domain names rather than raw IPs.
+> Outbound HTTP/HTTPS is restricted to IPs that the guest's dnsmasq resolved through a whitelisted domain — every successful lookup populates an nftables set (`allowed_ips`), and the firewall only accepts packets whose destination is in that set. Connections to hardcoded IPs that bypass DNS hit the default drop. IPv6 outbound traffic is dropped outright (no IPv6 rules). This is robust against accidental or prompt-injected exfiltration as long as the whitelisted domains themselves aren't bidirectional data channels — see the dangerous-mode warning below.
 
 ## Dangerous mode
 
@@ -196,6 +210,22 @@ Default allowed domains per tool:
 ```
 
 No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
+
+## Overriding tool packages
+
+Each runner is built with `lib.makeOverridable`, so the underlying tool package (`claude-code`, `codex-cli`, `copilot-cli`) can be swapped without forking the flake:
+
+```nix
+# flake.nix (consumer)
+let
+  llm-jail = inputs.llm-jail.packages.${system};
+in
+  llm-jail.claude.override {
+    claude-code = my-pinned-claude-code;
+  }
+```
+
+Useful for pinning a specific tool version, applying local patches, or testing an unreleased build.
 
 ## Adding a new tool
 

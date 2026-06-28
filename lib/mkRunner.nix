@@ -35,6 +35,7 @@ pkgs.writeShellApplication {
     NET_FILTER=1
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
+    MASK_PATTERNS=()
     TOOL_ARGS=()
 
     # ── Usage ─────────────────────────────────────────────────────────
@@ -49,6 +50,10 @@ pkgs.writeShellApplication {
       --tmpdir PATH         Directory to use for runtime data (default: ''${TMPDIR:-/tmp})
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
+      --mask GLOB           Mask paths matching GLOB in workspace/mounts (repeatable).
+                            GLOB with '/' uses -path "<root>/GLOB"; else -name GLOB.
+                            Matched paths appear as empty file/dir, read-only.
+                            Applied at boot only; new matches post-boot are not masked.
       --dev-env             Capture nix develop environment from workspace flake
       --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
       --allow-domain DOMAIN Add domain to network whitelist (repeatable)
@@ -87,6 +92,7 @@ pkgs.writeShellApplication {
         --immutable)    IMMUTABLE=1; shift ;;
         --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
         --no-net-filter) NET_FILTER=0; shift ;;
+        --mask)        MASK_PATTERNS+=("$2"); shift 2 ;;
         --store-disk)  STORE_DISK="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
         --vcpu)        VCPU="$2"; shift 2 ;;
@@ -100,6 +106,26 @@ pkgs.writeShellApplication {
       echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
       exit 1
     fi
+
+    # Paths used in virtfs option strings (comma-separated) and kernel cmdline
+    # (space-separated) cannot contain commas, spaces, or colons (mount spec delimiter).
+    validate_path() {
+      local path="$1" label="''${2:-path}"
+      if [[ "$path" == *,* ]]; then
+        echo "ERROR: $label must not contain commas: $path" >&2
+        exit 1
+      fi
+      if [[ "$path" == *\ * ]]; then
+        echo "ERROR: $label must not contain spaces: $path" >&2
+        exit 1
+      fi
+      if [[ "$path" == *:* ]]; then
+        echo "ERROR: $label must not contain colons: $path" >&2
+        exit 1
+      fi
+    }
+
+    validate_path "$LLMJAIL_TMPDIR" "tmpdir"
     RUNDIR=$(mktemp -d --tmpdir="$LLMJAIL_TMPDIR")
 
     cleanup_rundir() {
@@ -181,6 +207,16 @@ pkgs.writeShellApplication {
         fi
       done
 
+      # Forward host shell (resolved through symlinks so the /nix/store path
+      # is exposed, which the guest can reach via the 9p store mount even
+      # though /run/current-system/sw is remapped to /host-sw).
+      if [ -n "''${SHELL:-}" ]; then
+        RESOLVED_SHELL=$(readlink -f "$SHELL" 2>/dev/null || true)
+        if [ -n "$RESOLVED_SHELL" ]; then
+          echo "SHELL=\"$RESOLVED_SHELL\""
+        fi
+      fi
+
       # Forward AWS variables
       env | grep '^AWS_' || true
 
@@ -254,6 +290,7 @@ pkgs.writeShellApplication {
     MOUNT_IDX=0
     MOUNT_CMDLINE=""
     VIRTFS_ARGS=()
+    MASK_ROOTS=()
 
     add_mount() {
       local hostpath="$1" guestpath="$2" mode="$3"
@@ -274,13 +311,18 @@ pkgs.writeShellApplication {
     }
 
     # Default mounts
+    validate_path "$(pwd)" "workspace path"
     if [[ "$IMMUTABLE" -eq 1 ]]; then
       add_mount "$(pwd)" "/workspace" "ro-nocache"
     else
       add_mount "$(pwd)" "/workspace" "rw"
     fi
+    MASK_ROOTS+=("/workspace")
 
-
+    validate_path "$CONFIG_DIR" "config directory"
+    # Ensure the config dir exists even when persistDirs is empty — 9p refuses
+    # to share a non-existent path.
+    mkdir -p "$CONFIG_DIR"
     # Mount config dir read-only with no cache (overlay lower layer)
     # cache=none ensures host-side credential refreshes are visible instantly
     add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}-ro" "ro-nocache"
@@ -331,6 +373,14 @@ pkgs.writeShellApplication {
         cp "$src" "$RUNDIR/$(basename "$src")"
       fi
     done
+    # Tool-specific extra dotfiles (e.g. shell rc files for the shell tool)
+    ${builtins.concatStringsSep "\n" (
+      map (f: ''
+        if [ -f "$HOME/${f}" ]; then
+          cp "$HOME/${f}" "$RUNDIR/${f}"
+        fi
+      '') (toolDefaults.extraDotfiles or [ ])
+    )}
     # SSH directory is NOT mounted by default — use --ro-mount ~/.ssh if needed
 
     # Mount host packages if available (NixOS host)
@@ -350,8 +400,27 @@ pkgs.writeShellApplication {
         echo "ERROR: mount path does not exist or is not a directory: $hostpath" >&2
         exit 1
       fi
+      validate_path "$hostpath" "mount path"
       add_mount "$hostpath" "$hostpath" "$mode"
+      MASK_ROOTS+=("$hostpath")
     done
+
+    # ── Mask patterns ────────────────────────────────────────────────
+    for p in "''${MASK_PATTERNS[@]+"''${MASK_PATTERNS[@]}"}"; do
+      case "$p" in
+        *$'\n'*) echo "ERROR: --mask must not contain newlines: $p" >&2; exit 1 ;;
+      esac
+    done
+    if [ ''${#MASK_PATTERNS[@]} -gt 0 ]; then
+      printf '%s\n' "''${MASK_PATTERNS[@]}" > "$RUNDIR/mask-patterns"
+    else
+      : > "$RUNDIR/mask-patterns"
+    fi
+    if [ ''${#MASK_ROOTS[@]} -gt 0 ]; then
+      printf '%s\n' "''${MASK_ROOTS[@]}" > "$RUNDIR/mask-roots"
+    else
+      : > "$RUNDIR/mask-roots"
+    fi
 
     # ── Kernel command line ───────────────────────────────────────────
     KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"

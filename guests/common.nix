@@ -4,8 +4,8 @@
   # ── Tool options (set by each guest module) ─────────────────────────────
   options.llmjail = {
     toolBinary = lib.mkOption {
-      type = lib.types.str;
-      description = "Path to the tool binary to exec in the guest";
+      type = lib.types.either lib.types.str lib.types.package;
+      description = "Path to the tool binary to exec in the guest (string or derivation)";
     };
     dangerousFlag = lib.mkOption {
       type = lib.types.str;
@@ -16,6 +16,9 @@
   config = {
     # ── Boot ──────────────────────────────────────────────────────────────
     boot.loader.grub.enable = false;
+    # Switch to systemd-initrd (default in 26.11). Required because we use
+    # boot.initrd.systemd.services below to set up the /nix/store overlay.
+    boot.initrd.systemd.enable = true;
     boot.kernelParams = [ "console=ttyS1" ];
     boot.initrd.availableKernelModules = [
       "9p"
@@ -24,44 +27,72 @@
       "virtio_blk"
       "virtio_net"
       "virtio_rng"
-      "overlay"
     ];
+    # Force-load overlay in initrd: availableKernelModules only allows
+    # autoload, but the systemd-initrd path doesn't always trigger it for
+    # `mount -t overlay`, so make it explicit.
+    boot.initrd.kernelModules = [ "overlay" ];
     boot.kernelModules = [ "nf_tables" ];
 
     boot.initrd.supportedFilesystems = [ "ext4" ];
 
-    # Mount nix store overlay and nix/var in postMountCommands so we control
-    # ordering: the backing device (ext4 or tmpfs) MUST be mounted before the
-    # overlay, and postMountCommands runs after all neededForBoot fileSystems
-    # (including /.nix-lower/store) but before switch_root.
-    # The 9p mount is used directly as the overlay lower layer — overlayfs
-    # does not reliably cross submount boundaries, so the lower must be the
-    # mounted filesystem itself, not a parent directory containing it.
-    # /nix/var is bind-mounted from the backing so build artifacts
-    # (/nix/var/nix/builds/) land on the backing volume, not the root tmpfs.
-    boot.initrd.postMountCommands = ''
-      STORE_DISK=0
-      for arg in $(cat /proc/cmdline); do
-        case "$arg" in
-          llmjail.store_disk=1) STORE_DISK=1 ;;
-        esac
-      done
+    # Set up the /nix/store overlay and /nix/var bind in initrd. Runs after
+    # the 9p store mount (RequiresMountsFor) and ordered before
+    # initrd-fs.target so stage 2 sees the overlay. The backing device
+    # (ext4 disk or tmpfs) is chosen at runtime from llmjail.store_disk=1
+    # on the kernel cmdline. The 9p mount is used directly as the overlay
+    # lower layer — overlayfs does not reliably cross submount boundaries,
+    # so the lower must be the mounted filesystem itself. /nix/var is
+    # bind-mounted from the backing so build artifacts land there instead
+    # of the root tmpfs.
+    boot.initrd.systemd.services.llmjail-store-overlay = {
+      description = "Set up /nix/store overlay and /nix/var bind";
+      # Pulled in by initrd-fs.target AND by initrd-find-nixos-closure.service
+      # (the latter races us in 26.05+ and inspects /sysroot/nix/store before
+      # the overlay exists — so we must complete before it starts).
+      wantedBy = [ "initrd-fs.target" "initrd-find-nixos-closure.service" ];
+      before = [ "initrd-fs.target" "initrd-find-nixos-closure.service" ];
+      unitConfig = {
+        DefaultDependencies = false;
+        RequiresMountsFor = "/sysroot/.nix-lower/store";
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        # Mirror stdout/stderr to the kernel.log file (ttyS1) so failures
+        # are visible before we have journalctl. Drop after stabilizing.
+        StandardOutput = "journal+console";
+        StandardError = "journal+console";
+      };
+      script = ''
+        set -eu
 
-      mkdir -p $targetRoot/.nix-backing
-      if [ "$STORE_DISK" = "1" ]; then
-        mount /dev/vda $targetRoot/.nix-backing
-      else
-        mount -t tmpfs tmpfs $targetRoot/.nix-backing
-      fi
-      mkdir -p $targetRoot/.nix-backing/store-upper $targetRoot/.nix-backing/store-work $targetRoot/.nix-backing/var
+        STORE_DISK=0
+        for arg in $(cat /proc/cmdline); do
+          case "$arg" in
+            llmjail.store_disk=1) STORE_DISK=1 ;;
+          esac
+        done
 
-      mkdir -p $targetRoot/nix/store
-      mount -t overlay overlay $targetRoot/nix/store \
-        -o "lowerdir=$targetRoot/.nix-lower/store,upperdir=$targetRoot/.nix-backing/store-upper,workdir=$targetRoot/.nix-backing/store-work"
+        mkdir -p /sysroot/.nix-backing
+        if [ "$STORE_DISK" = "1" ]; then
+          mount /dev/vda /sysroot/.nix-backing
+        else
+          mount -t tmpfs tmpfs /sysroot/.nix-backing
+        fi
+        mkdir -p \
+          /sysroot/.nix-backing/store-upper \
+          /sysroot/.nix-backing/store-work \
+          /sysroot/.nix-backing/var
 
-      mkdir -p $targetRoot/nix/var
-      mount --bind $targetRoot/.nix-backing/var $targetRoot/nix/var
-    '';
+        mkdir -p /sysroot/nix/store
+        mount -t overlay overlay /sysroot/nix/store \
+          -o "lowerdir=/sysroot/.nix-lower/store,upperdir=/sysroot/.nix-backing/store-upper,workdir=/sysroot/.nix-backing/store-work"
+
+        mkdir -p /sysroot/nix/var
+        mount --bind /sysroot/.nix-backing/var /sysroot/nix/var
+      '';
+    };
 
     # ── Filesystems ───────────────────────────────────────────────────────
     fileSystems."/" = {
@@ -79,8 +110,9 @@
       neededForBoot = true;
     };
 
-    # /nix/store overlay and /nix/var bind-mount are done in postMountCommands
-    # (above) to ensure the backing device is ready first.
+    # /nix/store overlay and /nix/var bind-mount are done by the
+    # llmjail-store-overlay initrd service (above) which orders itself
+    # after the 9p lower layer is mounted.
 
     fileSystems."/llmjail-env" = {
       device = "envfs";
@@ -93,6 +125,13 @@
     networking.useDHCP = false;
     networking.nameservers = [ "10.0.2.3" ];
     networking.firewall.enable = false;
+
+    # nixos-26.05 + systemd-networkd auto-enables resolved, which inserts
+    # "resolve" before "dns" in nsswitch and steals all hostname lookups
+    # to its own stub on 127.0.0.53/54. That bypasses our dnsmasq on
+    # 127.0.0.1, so nftset additions never happen. Force it off so glibc
+    # falls back to the "dns" NSS module and reads /etc/resolv.conf.
+    services.resolved.enable = false;
 
     # Gives interface name "eth0"
     networking.usePredictableInterfaceNames = false;
@@ -203,6 +242,51 @@
           fi
         done
 
+        # ── Apply --mask patterns to user-data roots ────────────────
+        # Bind-mounts an empty dir/file over each matched path so the
+        # tool sees no contents. Static: applied once at boot. New
+        # files matching the pattern after boot are NOT masked.
+        if [ -s /llmjail-env/mask-patterns ] && [ -s /llmjail-env/mask-roots ]; then
+          ${pkgs.coreutils}/bin/mkdir -p /run/llmjail-mask/empty-dir
+          : > /run/llmjail-mask/empty-file
+          ${pkgs.coreutils}/bin/chmod 0555 /run/llmjail-mask/empty-dir
+          ${pkgs.coreutils}/bin/chmod 0444 /run/llmjail-mask/empty-file
+
+          while IFS= read -r root || [ -n "$root" ]; do
+            [ -z "$root" ] && continue
+            [ -d "$root" ] || continue
+
+            EXPR=()
+            while IFS= read -r p || [ -n "$p" ]; do
+              [ -z "$p" ] && continue
+              if [ ''${#EXPR[@]} -gt 0 ]; then EXPR+=("-o"); fi
+              case "$p" in
+                */*) EXPR+=("-path" "$root/$p") ;;
+                *)   EXPR+=("-name" "$p") ;;
+              esac
+            done < /llmjail-env/mask-patterns
+
+            [ ''${#EXPR[@]} -eq 0 ] && continue
+
+            # -xdev keeps the walk inside the root's filesystem (the
+            # 9p mount), so we never wander into nested mounts.
+            # -prune skips descent into matched dirs (cheap on big trees).
+            ${pkgs.findutils}/bin/find "$root" -xdev \( "''${EXPR[@]}" \) -prune -print0 |
+              while IFS= read -r -d "" target; do
+                [ "$target" = "$root" ] && continue
+                if [ -d "$target" ]; then
+                  ${pkgs.util-linux}/bin/mount --bind /run/llmjail-mask/empty-dir "$target"
+                elif [ -e "$target" ]; then
+                  ${pkgs.util-linux}/bin/mount --bind /run/llmjail-mask/empty-file "$target"
+                else
+                  continue
+                fi
+                ${pkgs.util-linux}/bin/mount -o remount,bind,ro "$target"
+                echo "masked: $target"
+              done
+          done < /llmjail-env/mask-roots
+        fi
+
       '';
     };
 
@@ -252,36 +336,21 @@
           exit 0
         fi
 
-        # ── Generate dnsmasq config ─────────────────────────────────
-        DNSMASQ_CONF="/etc/dnsmasq-llmjail.conf"
-        {
-          echo "no-resolv"
-          echo "no-hosts"
-          echo "listen-address=127.0.0.1"
-          echo "bind-interfaces"
-
-          # Forward allowed domains to QEMU's DNS
-          if [ -f /llmjail-env/allowed-domains ]; then
-            while IFS= read -r domain || [ -n "$domain" ]; do
-              [ -z "$domain" ] && continue
-              echo "server=/$domain/10.0.2.3"
-            done < /llmjail-env/allowed-domains
-          fi
-
-          # No default upstream — unmatched queries get REFUSED
-        } > "$DNSMASQ_CONF"
-
-        # ── Start dnsmasq ───────────────────────────────────────────
-        ${pkgs.dnsmasq}/bin/dnsmasq \
-          --conf-file="$DNSMASQ_CONF" \
-          --pid-file=/run/dnsmasq-llmjail.pid
-
-        # ── Point resolv.conf at local dnsmasq ──────────────────────
-        echo "nameserver 127.0.0.1" > /etc/resolv.conf
-
         # ── Apply nftables firewall rules ───────────────────────────
+        # Must run before dnsmasq so allowed_ips set exists when
+        # dnsmasq populates it on first DNS resolution.
         ${pkgs.nftables}/bin/nft -f - <<'NFTEOF'
         table inet llmjail_filter {
+          # Populated by dnsmasq --nftset on each successful DNS resolution.
+          # HTTP/HTTPS is only allowed to IPs that appear here, blocking
+          # direct hardcoded-IP connections that bypass DNS filtering.
+          # Plain set (no `flags interval`) so dnsmasq can add individual
+          # /32 entries — interval sets reject single addresses in some
+          # nft/dnsmasq combos.
+          set allowed_ips {
+            type ipv4_addr
+          }
+
           chain output {
             type filter hook output priority 0; policy drop;
 
@@ -298,14 +367,51 @@
             ip daddr 10.0.2.3 udp dport 53 accept
             ip daddr 10.0.2.3 tcp dport 53 accept
 
-            # Allow outbound HTTP/HTTPS
-            tcp dport { 80, 443 } accept
+            # Allow outbound HTTP/HTTPS only to DNS-resolved allowed IPs
+            ip daddr @allowed_ips tcp dport { 80, 443 } accept
 
             # Drop everything else
             log prefix "llmjail-drop: " drop
           }
         }
         NFTEOF
+
+        # ── Generate dnsmasq config ─────────────────────────────────
+        DNSMASQ_CONF="/etc/dnsmasq-llmjail.conf"
+        {
+          echo "no-resolv"
+          echo "no-hosts"
+          echo "listen-address=127.0.0.1"
+          echo "bind-interfaces"
+
+          # Forward allowed domains to QEMU's DNS; populate nftables set
+          # on each successful resolution so the IP becomes reachable.
+          if [ -f /llmjail-env/allowed-domains ]; then
+            while IFS= read -r domain || [ -n "$domain" ]; do
+              [ -z "$domain" ] && continue
+              echo "server=/$domain/10.0.2.3"
+              echo "nftset=/$domain/4#inet#llmjail_filter#allowed_ips"
+            done < /llmjail-env/allowed-domains
+          fi
+
+          # No default upstream — unmatched queries get REFUSED
+        } > "$DNSMASQ_CONF"
+
+        # ── Start dnsmasq ───────────────────────────────────────────
+        # --user=root keeps CAP_NET_ADMIN for the lifetime of the daemon;
+        # dnsmasq otherwise drops to "nobody" and nftset updates fail
+        # silently. We're inside a jail VM, root for dnsmasq is fine.
+        # --log-queries surfaces the nftset add events in journalctl so
+        # future filter regressions are debuggable from the guest.
+        ${pkgs.dnsmasq}/bin/dnsmasq \
+          --conf-file="$DNSMASQ_CONF" \
+          --pid-file=/run/dnsmasq-llmjail.pid \
+          --user=root \
+          --log-queries=extra \
+          --log-facility=-
+
+        # ── Point resolv.conf at local dnsmasq ──────────────────────
+        echo "nameserver 127.0.0.1" > /etc/resolv.conf
 
         echo "Network filtering enabled with $(${pkgs.coreutils}/bin/wc -l < /llmjail-env/allowed-domains) allowed domain(s)."
       '';
