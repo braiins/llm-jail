@@ -25,12 +25,13 @@
             claude-code = claude-code-nix.packages.${system}.default;
             codex-cli = codex-cli-nix.packages.${system}.default;
             copilot-cli = llm-agents.packages.${system}.copilot-cli;
+            opencode = llm-agents.packages.${system}.opencode;
           };
-        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli }:
+        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli, opencode }:
           let
             guest = nixpkgs.lib.nixosSystem {
               inherit system;
-              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli; };
+              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli opencode; };
               modules = [
                 toolDef.guestModule
                 { nixpkgs.config.allowUnfree = true; }
@@ -65,6 +66,7 @@
           claude-code = claude-code-nix.packages.${system}.default;
           codex-cli = codex-cli-nix.packages.${system}.default;
           copilot-cli = llm-agents.packages.${system}.copilot-cli;
+          opencode = llm-agents.packages.${system}.opencode;
         }
       );
     };

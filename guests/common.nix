@@ -439,6 +439,15 @@
             export PATH="/host-sw/bin:$PATH"
           fi
 
+          # nixpkgs zsh bakes a global zshenv into its own store path, so a
+          # forwarded host $SHELL sources it even though the guest has no
+          # /etc/zshenv. Unless this guard is set, that zshenv sources the
+          # guest's /etc/set-environment in every `zsh -c`, which REPLACES
+          # PATH with the guest session default - silently dropping the
+          # /host-sw, /host-user-sw, and dev-env entries above. The bash
+          # login path (/etc/profile) honors the same guard.
+          export __NIXOS_SET_ENVIRONMENT_DONE=1
+
           if [ -f /llmjail-env/dev-env ]; then
             # dev-env is output of `nix print-dev-env` - a bash script setting PATH, etc.
             # shellcheck disable=SC1091

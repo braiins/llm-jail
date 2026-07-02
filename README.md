@@ -9,6 +9,7 @@ Supported tools:
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `llm-jail-claude` | `--dangerously-skip-permissions` |
 | [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
+| [opencode](https://opencode.ai) | `llm-jail-opencode` | `--auto` |
 | Interactive shell (debugging) | `llm-jail-shell` | - |
 
 ## Requirements
@@ -34,6 +35,9 @@ nix run github:braiins/llm-jail#codex
 # Run GitHub Copilot CLI
 nix run github:braiins/llm-jail#copilot
 
+# Run opencode
+nix run github:braiins/llm-jail#opencode
+
 # Drop into a shell inside the sandbox (for debugging the jail itself)
 nix run github:braiins/llm-jail#shell
 ```
@@ -46,9 +50,9 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 
 ## First run & authentication
 
-Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, or `ZDOTDIR` for the shell). Your real `~/.claude`, `~/.codex`, and `~/.copilot` are never mounted or read.
+Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, or `XDG_DATA_HOME` for opencode). Your real `~/.claude`, `~/.codex`, `~/.copilot`, and `~/.local/share/opencode` are never mounted or read.
 
-On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir - that's expected, there is no keychain in the guest.
+On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir - that's expected, there is no keychain in the guest. opencode doesn't prompt by itself - log in once with `nix run .#opencode -- -- auth login`.
 
 Work for multiple clients by giving each its own profile, each with its own one-time login:
 
@@ -62,7 +66,7 @@ nix run .#claude -- --profile client2
 ## Usage
 
 ```
-llm-jail-{claude,codex,copilot,shell} [options] [-- tool-args...]
+llm-jail-{claude,codex,copilot,opencode,shell} [options] [-- tool-args...]
 ```
 
 ### Options
@@ -145,7 +149,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
 
 - The current working directory -> `/workspace` (read-write)
-- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, or `.shell` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`/`XDG_DATA_HOME`/`ZDOTDIR`)
+- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.shell`, or `.opencode` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`/`XDG_DATA_HOME`/`ZDOTDIR`)
 - `~/.gitconfig` is copied in (9p cannot mount single files)
 - Host system and user packages -> `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
@@ -179,6 +183,7 @@ Default allowed domains per tool:
 | Claude | `api.anthropic.com`, `claude.ai`, `platform.claude.com`, `statsig.anthropic.com`, `sentry.io` |
 | Codex | `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `sentry.io` |
 | Copilot | `github.com`, `api.github.com`, `api.individual.githubcopilot.com`, `copilot-proxy.githubusercontent.com`, `githubcopilot.com`, `collector.github.com`, … |
+| opencode | `models.dev`, `registry.npmjs.org`, plus the major hosted providers and their login flows: `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `api.openai.com`, `auth.openai.com`, `generativelanguage.googleapis.com`, `api.githubcopilot.com`, `openrouter.ai`, … (account-specific endpoints like Bedrock/Azure/Vertex need `--allow-domain`) |
 
 > [!NOTE]
 > Outbound HTTP/HTTPS is restricted to IPs that the guest's dnsmasq resolved through a whitelisted domain - every successful lookup populates an nftables set (`allowed_ips`), and the firewall only accepts packets whose destination is in that set. Connections to hardcoded IPs that bypass DNS hit the default drop. IPv6 outbound traffic is dropped outright (no IPv6 rules). This is robust against accidental or prompt-injected exfiltration as long as the whitelisted domains themselves aren't bidirectional data channels - see the dangerous-mode warning below.
@@ -186,7 +191,7 @@ Default allowed domains per tool:
 ## Dangerous mode
 
 > [!CAUTION]
-> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex, `--yolo` for Copilot). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
+> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex, `--yolo` for Copilot, `--auto` for opencode). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
 >
 > Network filtering remains active in dangerous mode - the agent can only reach whitelisted domains. To grant unrestricted network access, use `--no-net-filter` (this is independent of `--dangerous`).
 >
@@ -220,7 +225,7 @@ Default allowed domains per tool:
 |  systemd                                       |
 |    -> llmjail-mounts: mount 9p shares          |
 |    -> llmjail-net-filter: dnsmasq + nftables   |
-|    -> llmjail-tool: exec claude/codex/copilot  |
+|    -> llmjail-tool: exec the tool binary       |
 |                                                |
 |  ExecStopPost: poweroff when tool exits        |
 +------------------------------------------------+
@@ -230,7 +235,7 @@ No persistent disk images are involved. The guest kernel and initrd are built by
 
 ## Overriding tool packages
 
-Each runner is built with `lib.makeOverridable`, so the underlying tool package (`claude-code`, `codex-cli`, `copilot-cli`) can be swapped without forking the flake:
+Each runner is built with `lib.makeOverridable`, so the underlying tool package (`claude-code`, `codex-cli`, `copilot-cli`, `opencode`) can be swapped without forking the flake:
 
 ```nix
 # flake.nix (consumer)
