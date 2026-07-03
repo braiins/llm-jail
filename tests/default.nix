@@ -65,7 +65,7 @@ let
                 "systemctl show llmjail-tool.service -p User,WorkingDirectory"
             )
             assert "User=user" in output, f"Expected User=user in: {output}"
-            assert "WorkingDirectory=/workspace" in output, f"Expected WorkingDirectory=/workspace in: {output}"
+            assert "WorkingDirectory=-/workspace" in output, f"Expected WorkingDirectory=-/workspace in: {output}"
 
         with subtest("common packages are available"):
             machine.succeed("which git")

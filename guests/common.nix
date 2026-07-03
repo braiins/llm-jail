@@ -474,7 +474,7 @@
             ${pkgs.coreutils}/bin/stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
           fi
 
-          cd /workspace
+          cd "''${WORKSPACE_DIR:-/workspace}"
           exec ${config.llmjail.toolBinary} "''${ARGS[@]}"
         '';
       in
@@ -486,7 +486,7 @@
         path = [ "/run/current-system/sw" ];
         serviceConfig = {
           User = "user";
-          WorkingDirectory = "/workspace";
+          WorkingDirectory = "-/workspace";
           EnvironmentFile = "/llmjail-env/env";
           StandardInput = "tty";
           StandardOutput = "tty";
