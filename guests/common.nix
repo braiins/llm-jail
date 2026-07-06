@@ -204,31 +204,16 @@
         for entry in "''${ENTRIES[@]}"; do
           IFS=':' read -r tag mpath mode <<< "$entry"
 
-          if [ "$mode" = "overlay" ]; then
-            # Overlay entry: tag is the lower path (already mounted), mpath is the target
-            echo "Creating overlay $tag -> $mpath"
-            ${pkgs.coreutils}/bin/mkdir -p "$mpath" "''${mpath}-upper/upper" "''${mpath}-upper/work"
-            ${pkgs.util-linux}/bin/mount -t overlay overlay "$mpath" \
-              -o "lowerdir=$tag,upperdir=''${mpath}-upper/upper,workdir=''${mpath}-upper/work"
-          elif [ "$mode" = "bind-rw-file" ]; then
-            echo "Bind-mounting file $tag -> $mpath (rw)"
-            parent="$(${pkgs.coreutils}/bin/dirname "$mpath")"
-            ${pkgs.coreutils}/bin/mkdir -p "$parent"
-            ${pkgs.coreutils}/bin/touch "$mpath"
-            ${pkgs.util-linux}/bin/mount --bind "$tag" "$mpath"
-            ${pkgs.util-linux}/bin/mount -o remount,bind,rw "$mpath"
-          else
-            echo "Mounting $tag -> $mpath ($mode)"
-            ${pkgs.coreutils}/bin/mkdir -p "$mpath"
+          echo "Mounting $tag -> $mpath ($mode)"
+          ${pkgs.coreutils}/bin/mkdir -p "$mpath"
 
-            OPTS="trans=virtio,version=9p2000.L,cache=mmap"
-            if [ "$mode" = "ro" ]; then
-              OPTS="$OPTS,ro"
-            elif [ "$mode" = "ro-nocache" ]; then
-              OPTS="trans=virtio,version=9p2000.L,cache=none,ro"
-            fi
-            ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
+          OPTS="trans=virtio,version=9p2000.L,cache=mmap"
+          if [ "$mode" = "ro" ]; then
+            OPTS="$OPTS,ro"
+          elif [ "$mode" = "ro-nocache" ]; then
+            OPTS="trans=virtio,version=9p2000.L,cache=none,ro"
           fi
+          ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
 
           # Fix ownership for paths under /home/user
           case "$mpath" in
@@ -238,28 +223,13 @@
           esac
         done
 
-        # Copy dotfiles provided via envfs (can't mount individual files via 9p)
-        # Any file starting with '.' placed in envfs by mkRunner is copied to $HOME
+        # Copy dotfiles provided via envfs (can't mount individual files via
+        # 9p). Currently just .gitconfig, placed there by mkRunner.
         for src in /llmjail-env/.*; do
           [ -f "$src" ] || continue
           name="''${src##*/}"
           ${pkgs.coreutils}/bin/cp "$src" "/home/user/$name"
           ${pkgs.coreutils}/bin/chown user:users "/home/user/$name"
-        done
-
-        # Live-mount credentials from the ro lower layer (cache=none) so
-        # host-side token refreshes are visible instantly in the guest.
-        # Bind-mount bypasses the overlay — reads go straight to the 9p mount.
-        for cdir in /home/user/*-ro; do
-          [ -d "$cdir" ] || continue
-          target="/home/user/$(${pkgs.coreutils}/bin/basename "$cdir" -ro)"
-          CRED="$cdir/.credentials.json"
-          DEST="$target/.credentials.json"
-          if [ -f "$CRED" ]; then
-            ${pkgs.coreutils}/bin/touch "$DEST"
-            ${pkgs.util-linux}/bin/mount --bind "$CRED" "$DEST"
-            echo "Bind-mounted credentials: $CRED -> $DEST"
-          fi
         done
 
         # ── Apply --mask patterns to user-data roots ────────────────
@@ -314,7 +284,6 @@
               done
           done < /llmjail-env/mask-roots
         fi
-
       '';
     };
 

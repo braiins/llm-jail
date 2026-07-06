@@ -9,6 +9,15 @@ let
   toplevel = guest.config.system.build.toplevel;
   qemuPkg = pkgs.qemu_kvm;
   arch = if pkgs.stdenv.hostPlatform.isx86_64 then "x86_64" else "aarch64";
+  # Tools without a configDirName (e.g. the debug shell) keep no state:
+  # the runner script contains no config-dir handling at all.
+  hasConfigDir = toolDefaults ? configDirName;
+  # Double-quoted so the two-space option indentation survives Nix's
+  # indented-string stripping when interpolated into the usage heredoc.
+  configUsage = pkgs.lib.optionalString hasConfigDir (
+    "  --profile NAME        Tool state profile under ~/.config/llm-jail/${name}/ (default: default)\n"
+    + "  --config-dir PATH     Tool state directory, mounted read-write; overrides --profile\n"
+  );
 in
 pkgs.writeShellApplication {
   name = "llm-jail-${name}";
@@ -31,7 +40,10 @@ pkgs.writeShellApplication {
     IMMUTABLE=0
     LLMJAIL_TMPDIR=''${TMPDIR:-/tmp}
     STORE_DISK=0
-    CONFIG_DIR="''${LLMJAIL_CONFIG_DIR:-$HOME/${toolDefaults.configDirName}}"
+    ${pkgs.lib.optionalString hasConfigDir ''
+      PROFILE="''${LLMJAIL_PROFILE:-default}"
+      CONFIG_DIR="''${LLMJAIL_CONFIG_DIR:-}"
+    ''}
     NET_FILTER=1
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
@@ -45,8 +57,7 @@ pkgs.writeShellApplication {
 
     Options:
       --dangerous           Enable the tool's dangerous / unattended mode
-      --config-dir PATH     Tool config directory (default: ~/${toolDefaults.configDirName})
-      --immutable           Mount workspace as read-only instead of read-write
+    ${configUsage}  --immutable           Mount workspace as read-only instead of read-write
       --tmpdir PATH         Directory to use for runtime data (default: ''${TMPDIR:-/tmp})
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
@@ -87,7 +98,10 @@ pkgs.writeShellApplication {
       case "$1" in
         --dangerous)   DANGEROUS=1; shift ;;
         --dev-env)     DEV_ENV=1; shift ;;
+    ${pkgs.lib.optionalString hasConfigDir ''
+        --profile)     PROFILE="$2"; shift 2 ;;
         --config-dir)  CONFIG_DIR="$2"; shift 2 ;;
+    ''}
         --mount)       EXTRA_MOUNTS+=("$2:rw"); shift 2 ;;
         --ro-mount)    EXTRA_MOUNTS+=("$2:ro"); shift 2 ;;
         --tmpdir)      LLMJAIL_TMPDIR="$2"; shift 2 ;;
@@ -103,6 +117,14 @@ pkgs.writeShellApplication {
         *)             echo "Unknown option: $1" >&2; usage ;;
       esac
     done
+
+    ${pkgs.lib.optionalString hasConfigDir ''
+      # Jail-private tool state, fully separate from the host tool's own
+      # config dir. --config-dir / LLMJAIL_CONFIG_DIR overrides --profile.
+      if [ -z "$CONFIG_DIR" ]; then
+        CONFIG_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/llm-jail/${name}/$PROFILE"
+      fi
+    ''}
 
     if [ ! -d "$LLMJAIL_TMPDIR" ]; then
       echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
@@ -238,7 +260,10 @@ pkgs.writeShellApplication {
 
       echo "HOME=/home/user"
       echo "LLMJAIL_DANGEROUS=$DANGEROUS"
-    } > "$ENV_FILE"
+    ${pkgs.lib.optionalString hasConfigDir ''
+      # Relocate the tool's state into the jail-private config mount
+      echo "${toolDefaults.configEnvVar}=/home/user/${toolDefaults.configDirName}"
+    ''}} > "$ENV_FILE"
 
     # Write tool args as null-separated file to preserve argument boundaries
     if [ ''${#TOOL_ARGS[@]} -gt 0 ]; then
@@ -324,60 +349,18 @@ pkgs.writeShellApplication {
     fi
     MASK_ROOTS+=("/workspace")
 
-    validate_path "$CONFIG_DIR" "config directory"
-    # Ensure the config dir exists even when persistDirs is empty — 9p refuses
-    # to share a non-existent path.
-    mkdir -p "$CONFIG_DIR"
-    # Mount config dir read-only with no cache (overlay lower layer)
-    # cache=none ensures host-side credential refreshes are visible instantly
-    add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}-ro" "ro-nocache"
-
-    # Overlay directive: guest creates overlayfs with tmpfs upper
-    # Format: lower:target:overlay (no 9p device needed)
-    if [ -n "$MOUNT_CMDLINE" ]; then
-      MOUNT_CMDLINE="$MOUNT_CMDLINE,/home/user/${toolDefaults.configDirName}-ro:/home/user/${toolDefaults.configDirName}:overlay"
-    else
-      MOUNT_CMDLINE="/home/user/${toolDefaults.configDirName}-ro:/home/user/${toolDefaults.configDirName}:overlay"
-    fi
-
-    # Mount persist subdirs read-write on top of the overlay
-    ${builtins.concatStringsSep "\n" (
-      map (subdir: ''
-        mkdir -p "$CONFIG_DIR/${subdir}"
-        add_mount "$CONFIG_DIR/${subdir}" "/home/user/${toolDefaults.configDirName}/${subdir}" "rw"
-      '') toolDefaults.persistDirs
-    )}
-
-    # Mount full config dir RW at a root-only path as source for per-file RW binds.
-    ${pkgs.lib.optionalString (toolDefaults.persistFiles or [ ] != [ ]) ''
-      add_mount "$CONFIG_DIR" "/root/.llmjail-${toolDefaults.configDirName}-rw-src" "rw"
+    ${pkgs.lib.optionalString hasConfigDir ''
+      validate_path "$CONFIG_DIR" "config directory"
+      # 9p refuses to share a non-existent path; first run starts empty and
+      # the tool goes through its login/onboarding flow inside the jail.
+      mkdir -p "$CONFIG_DIR"
+      add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}" "rw"
     ''}
 
-    # Mount persist files RW from the hidden RW source onto the user-visible overlay.
-    ${builtins.concatStringsSep "\n" (
-      map (file:
-        let
-          dir = dirOf file;
-        in
-        ''
-          mkdir -p "$CONFIG_DIR/${dir}"
-          touch "$CONFIG_DIR/${file}"
-          if [ -n "$MOUNT_CMDLINE" ]; then
-            MOUNT_CMDLINE="$MOUNT_CMDLINE,/root/.llmjail-${toolDefaults.configDirName}-rw-src/${file}:/home/user/${toolDefaults.configDirName}/${file}:bind-rw-file"
-          else
-            MOUNT_CMDLINE="/root/.llmjail-${toolDefaults.configDirName}-rw-src/${file}:/home/user/${toolDefaults.configDirName}/${file}:bind-rw-file"
-          fi
-        ''
-      ) (toolDefaults.persistFiles or [ ])
-    )}
-
-    # Copy individual config files into envfs share (9p can't mount single files)
-    CONFIG_JSON="''${CONFIG_DIR%/${toolDefaults.configDirName}}/${toolDefaults.configDirName}.json"
-    for src in "$CONFIG_JSON" "$HOME/.gitconfig"; do
-      if [ -f "$src" ]; then
-        cp "$src" "$RUNDIR/$(basename "$src")"
-      fi
-    done
+    # Copy .gitconfig into the envfs share (9p can't mount single files)
+    if [ -f "$HOME/.gitconfig" ]; then
+      cp "$HOME/.gitconfig" "$RUNDIR/.gitconfig"
+    fi
     # SSH directory is NOT mounted by default — use --ro-mount ~/.ssh if needed
 
     # Mount host packages if available (NixOS host)

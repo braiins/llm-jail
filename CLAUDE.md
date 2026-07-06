@@ -10,7 +10,7 @@ nix run .#claude -- --help      # Show CLI usage
 nix flake check                 # Validate flake structure
 ```
 
-End-to-end test (needs a terminal and valid Claude credentials in `~/.claude`):
+End-to-end test (needs a terminal and a prior in-jail login — run `nix run .#claude` once and complete the login flow, which persists credentials in `~/.config/llm-jail/claude/default`):
 ```bash
 nix run .#claude -- --dangerous -- -p "Write hello to /workspace/hello.txt" --max-turns 3
 ```
@@ -31,10 +31,10 @@ This is a Nix flake that runs coding agents inside QEMU microVMs with hardware-l
 
 ## Key Constraints
 
-- **9p can't mount single files.** Config files like `.claude.json` and `.gitconfig` are copied into the envfs temp dir on the host and copied out by the guest mounts service. The dotfile list must stay in sync between `mkRunner.nix` (host copy-in) and `common.nix` (guest copy-out).
+- **9p can't mount single files.** `.gitconfig` is copied into the envfs temp dir on the host and copied out to `$HOME` by the guest mounts service.
 - **Tool args use null-separated files** (`tool-args`) to preserve argument boundaries through the host→guest boundary. Don't use env vars for args with spaces.
 - **`/run` is remounted by systemd in stage 2**, so guest 9p mounts must not go under `/run`. The envfs mount is at `/llmjail-env`.
 - **`writeShellApplication` runs shellcheck.** Avoid `compgen` and other builtins that shellcheck flags. Use `env | grep` patterns instead.
 - **`/nix/store` uses an overlay; `/nix/var` is bind-mounted from the same backing.** By default both use a tmpfs at `/.nix-backing`. Use `--store-disk SIZE` to use a disk-backed ext4 image instead, giving space for large builds and intermediate artifacts in `/nix/var/nix/builds/`. Dev shell environments can alternatively be captured on the host via `nix print-dev-env` (opt-in with `--dev-env`) and sourced in the guest.
 - **The 9p store mount and overlay backing live outside `/nix`.** The host store is mounted read-only at `/.nix-lower/store` (used as the overlay lower layer directly — overlayfs does not reliably cross submount boundaries, so the lower must be the mounted filesystem itself). The overlay backing (ext4 or tmpfs) is at `/.nix-backing`. Keep this in mind when debugging mount issues inside the guest.
-- **Config dirs use a read-only overlay pattern.** `~/.claude` (and `~/.codex`) is mounted read-only as the lower layer of an overlayfs with a tmpfs upper, so writes to credentials/settings are ephemeral. Only subdirs listed in `persistDirs` in `tools.nix` get writable 9p mounts on top of the overlay. To persist a new subdir, add it to `persistDirs` — `mkRunner.nix` creates the host dir and adds the rw mount, and `common.nix` processes entries in order (ro 9p → overlay → rw 9p mounts).
+- **Tool state is jail-private.** Each tool's state lives in a host dir `~/.config/llm-jail/<tool>/<profile>` (never the host tool's own config), mounted read-write at `/home/user/<configDirName>`. The tool is relocated into it via its native env var (`configEnvVar` in `tools.nix`, e.g. `CLAUDE_CONFIG_DIR`), which `mkRunner.nix` writes into the env file consumed by `llmjail-tool.service`. A tool that keeps no state (the debug shell) simply omits `configDirName`/`configEnvVar` and gets no config mount or `--config-dir`/`--profile` flags. Never mount a directory the host tool also uses read-write — a jailed agent could plant hooks/settings the host tool would execute.

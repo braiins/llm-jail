@@ -16,7 +16,8 @@ Supported tools:
 - Linux (x86_64 or aarch64)
 - [Nix](https://nixos.org/) with flakes enabled
 - KVM access recommended (falls back to emulation without it)
-- Valid credentials for your chosen tool (`~/.claude`, `~/.codex`, or `~/.copilot`)
+
+No host-side tool credentials are needed: you log in once inside the jail on first run, and the tool's state persists in a jail-private directory under `~/.config/llm-jail/` (see [First run & authentication](#first-run--authentication)).
 
 ## Quick start
 
@@ -43,6 +44,21 @@ Pass tool arguments after `--`:
 nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max-turns 5
 ```
 
+## First run & authentication
+
+Each tool keeps its state in a jail-private directory on the host — `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) — mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`). Your real `~/.claude`, `~/.codex`, and `~/.copilot` are never mounted or read.
+
+On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir — that's expected, there is no keychain in the guest.
+
+Work for multiple clients by giving each its own profile, each with its own one-time login:
+
+```bash
+nix run .#claude -- --profile client1
+nix run .#claude -- --profile client2
+```
+
+> **Changed semantics (migration note):** `--config-dir` used to share a host config directory into the jail read-only. It now designates a jail-private directory that is mounted **read-write**. Do not point it at a directory your host tool also uses — a compromised agent could write hooks or settings there that your host tool would later execute. Use a profile instead. If you want to reuse an existing host login rather than logging in fresh, you can copy it in at your own risk: `cp -a ~/.claude/. ~/.config/llm-jail/claude/default/` (note that host and jail will then refresh the same OAuth token independently).
+
 ## Usage
 
 ```
@@ -54,7 +70,8 @@ llm-jail-{claude,codex,copilot,shell} [options] [-- tool-args...]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--dangerous` | Enable the tool's dangerous / unattended mode | off |
-| `--config-dir PATH` | Tool config directory | `~/.claude` or `~/.codex` |
+| `--profile NAME` | Tool state profile under `~/.config/llm-jail/<tool>/` | `default` |
+| `--config-dir PATH` | Tool state directory, mounted read-write; overrides `--profile` | `~/.config/llm-jail/<tool>/default` |
 | `--immutable` | Mount workspace as read-only | off |
 | `--tmpdir PATH` | Directory to use for runtime data | `${TMPDIR:-/tmp}` |
 | `--mount PATH` | Extra read-write mount (repeatable) | — |
@@ -116,20 +133,20 @@ nix run .#claude -- --store-disk 20 -- -p "nix build and run the tests"
 Drop into your own shell inside the sandbox to inspect mounts or reproduce tool behavior manually:
 
 ```bash
-nix run .#shell                              # offline, your shell rc files copied in
+nix run .#shell                              # offline debugging shell
 nix run .#shell -- --allow-domain github.com # opt in to specific domains
 nix run .#shell -- --no-net-filter           # full network for debugging
 ```
 
-The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` path is used) and falls back to zsh or bash if the host shell isn't reachable inside the guest (e.g. on non-NixOS hosts). The following dotfiles are copied from `$HOME` if they exist: `.bashrc`, `.bash_profile`, `.bash_logout`, `.profile`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.inputrc`. Any rc-file references to host-only paths (plugin managers in `~/.zsh/plugins`, etc.) will produce startup errors; bring those in with `--ro-mount` as needed.
+The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` path is used) and falls back to zsh or bash if the host shell isn't reachable inside the guest (e.g. on non-NixOS hosts). Shell rc files are not copied in; bring anything you need with `--ro-mount`.
 
 ## What's isolated
 
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
 
 - The current working directory → `/workspace` (read-write)
-- The tool config directory → `/home/user/.claude`, `.codex`, or `.copilot` (read-only overlay with writable persist dirs)
-- `~/.gitconfig` and the tool's JSON config are copied in (9p cannot mount single files)
+- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` → `/home/user/.claude`, `.codex`, or `.copilot` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`)
+- `~/.gitconfig` is copied in (9p cannot mount single files)
 - Host system and user packages → `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
 
@@ -159,8 +176,8 @@ Default allowed domains per tool:
 
 | Tool | Domains |
 |------|---------|
-| Claude | `api.anthropic.com`, `statsig.anthropic.com`, `sentry.io` |
-| Codex | `api.openai.com`, `chatgpt.com`, `sentry.io` |
+| Claude | `api.anthropic.com`, `claude.ai`, `platform.claude.com`, `statsig.anthropic.com`, `sentry.io` |
+| Codex | `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `sentry.io` |
 | Copilot | `github.com`, `api.github.com`, `api.individual.githubcopilot.com`, `copilot-proxy.githubusercontent.com`, `githubcopilot.com`, `collector.github.com`, … |
 
 > [!NOTE]
