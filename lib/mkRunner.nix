@@ -1,8 +1,8 @@
-{
-  pkgs,
-  name,
-  guest,
-  toolDefaults,
+{ pkgs
+, name
+, guest
+, toolDefaults
+,
 }:
 
 let
@@ -32,7 +32,6 @@ pkgs.writeShellApplication {
   text = ''
     set -euo pipefail
 
-    # ── Defaults ──────────────────────────────────────────────────────
     MEM="${toString toolDefaults.mem}"
     VCPU="${toString toolDefaults.vcpu}"
     DANGEROUS=0
@@ -50,7 +49,6 @@ pkgs.writeShellApplication {
     MASK_PATTERNS=()
     TOOL_ARGS=()
 
-    # ── Usage ─────────────────────────────────────────────────────────
     usage() {
       cat <<'USAGE'
     Usage: llm-jail-${name} [options] [-- tool-args...]
@@ -93,7 +91,6 @@ pkgs.writeShellApplication {
     }
     trap cleanup EXIT
 
-    # ── Parse CLI ─────────────────────────────────────────────────────
     while [ $# -gt 0 ]; do
       case "$1" in
         --dangerous)   DANGEROUS=1; shift ;;
@@ -157,15 +154,14 @@ pkgs.writeShellApplication {
     }
     CLEANUP_FUNCS+=(cleanup_rundir)
 
-    # ── Terminal resize side channel ──────────────────────────────────
     # TODO: QEMU has a pending patch series (v6, "console: add
-    # TIOCSWINSZ support") that adds native SIGWINCH→virtconsole
+    # TIOCSWINSZ support") that adds native SIGWINCH->virtconsole
     # forwarding. When those patches land upstream and reach nixpkgs,
     # this entire side-channel (FIFO, socat bridge, virtio-serial
     # chardev, and the guest llmjail-winsize service) can be replaced
     # by switching to -chardev console + hvc0 with the resize flag.
     #
-    # Stock QEMU has no SIGWINCH→virtio-console forwarding, so we run a
+    # Stock QEMU has no SIGWINCH->virtio-console forwarding, so we run a
     # dedicated virtio-serial port (llmjail.winsize) as a unix-socket
     # chardev and push "cols rows" lines through it on every SIGWINCH.
     # The guest's llmjail-winsize service reads the port and issues
@@ -174,7 +170,7 @@ pkgs.writeShellApplication {
     # QEMU runs in the foreground so stdin/stdout are cleanly wired to
     # -serial mon:stdio. bash defers trap handlers until a synchronous
     # foreground child exits, so a dedicated subshell owns the SIGWINCH
-    # trap and parks in `sleep & wait` — wait's trap-interrupt semantics
+    # trap and parks in `sleep & wait` - wait's trap-interrupt semantics
     # fire the trap promptly on each resize.
     WINSIZE_SOCK="$RUNDIR/winsize.sock"
     WINSIZE_FIFO="$RUNDIR/winsize.fifo"
@@ -221,10 +217,8 @@ pkgs.writeShellApplication {
     }
     CLEANUP_FUNCS+=(cleanup_winch)
 
-    # ── Write env file ────────────────────────────────────────────────
     ENV_FILE="$RUNDIR/env"
     {
-      # Forward API keys and relevant env vars
       for var in ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_CODE_MAX_OUTPUT_TOKENS OPENAI_API_KEY OPENAI_BASE_URL; do
         if [ -n "''${!var:-}" ]; then
           echo "$var=\"''${!var}\""
@@ -241,7 +235,6 @@ pkgs.writeShellApplication {
         fi
       fi
 
-      # Forward AWS variables
       env | grep '^AWS_' || true
 
       # Forward terminal type and dimensions so TUI apps render correctly
@@ -272,10 +265,8 @@ pkgs.writeShellApplication {
       : > "$RUNDIR/tool-args"
     fi
 
-    # ── Build allowed-domains file ─────────────────────────────────────
     if [ "$NET_FILTER" = "1" ]; then
       {
-        # Tool-specific default domains
         ${builtins.concatStringsSep "\n    " (
           map (d: "echo \"${d}\"") toolDefaults.allowedDomains
         )}
@@ -293,7 +284,6 @@ pkgs.writeShellApplication {
           fi
         done
 
-        # User-specified extra domains
         for d in "''${EXTRA_DOMAINS[@]+"''${EXTRA_DOMAINS[@]}"}"; do
           echo "$d"
         done
@@ -302,7 +292,6 @@ pkgs.writeShellApplication {
       : > "$RUNDIR/allowed-domains"
     fi
 
-    # ── Capture nix develop environment if requested ───────────────────
     if [ "$DEV_ENV" = "1" ]; then
       echo "Evaluating nix dev shell..." >&2
       if nix print-dev-env --no-warn-dirty "$(pwd)" > "$RUNDIR/dev-env" 2>/dev/null; then
@@ -313,7 +302,6 @@ pkgs.writeShellApplication {
       fi
     fi
 
-    # ── Build mount specs ─────────────────────────────────────────────
     MOUNT_IDX=0
     MOUNT_CMDLINE=""
     VIRTFS_ARGS=()
@@ -337,7 +325,6 @@ pkgs.writeShellApplication {
       fi
     }
 
-    # Default mounts
     validate_path "$(pwd)" "workspace path"
     if [[ "$IMMUTABLE" -eq 1 ]]; then
       add_mount "$(pwd)" "/workspace" "ro-nocache"
@@ -361,7 +348,6 @@ pkgs.writeShellApplication {
     if [ -f "$HOME/.gitconfig" ]; then
       cp "$HOME/.gitconfig" "$RUNDIR/.gitconfig"
     fi
-    # SSH directory is NOT mounted by default — use --ro-mount ~/.ssh if needed
 
     # Mount host packages if available (NixOS host)
     if [ -d /run/current-system/sw ]; then
@@ -375,7 +361,6 @@ pkgs.writeShellApplication {
       add_mount "/etc/profiles/per-user/$USERNAME" "/host-user-sw" "ro"
     fi
 
-    # User extra mounts
     for spec in "''${EXTRA_MOUNTS[@]+"''${EXTRA_MOUNTS[@]}"}"; do
       if [ -z "$spec" ]; then continue; fi
       hostpath="''${spec%:*}"
@@ -389,7 +374,6 @@ pkgs.writeShellApplication {
       MASK_ROOTS+=("$hostpath")
     done
 
-    # ── Mask patterns ────────────────────────────────────────────────
     for p in "''${MASK_PATTERNS[@]+"''${MASK_PATTERNS[@]}"}"; do
       case "$p" in
         *$'\n'*) echo "ERROR: --mask must not contain newlines: $p" >&2; exit 1 ;;
@@ -406,7 +390,6 @@ pkgs.writeShellApplication {
       : > "$RUNDIR/mask-roots"
     fi
 
-    # ── Kernel command line ───────────────────────────────────────────
     KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"
 
     if [ "$STORE_DISK" -gt 0 ]; then
@@ -421,7 +404,6 @@ pkgs.writeShellApplication {
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.user_uid=$USER_UID"
     fi
 
-    # ── Store disk image ────────────────────────────────────────────
     DISK_ARGS=()
     if [ "$STORE_DISK" -gt 0 ]; then
       truncate -s "''${STORE_DISK}G" "$RUNDIR/store.img"
@@ -429,7 +411,6 @@ pkgs.writeShellApplication {
       DISK_ARGS+=("-drive" "file=$RUNDIR/store.img,format=raw,if=virtio,discard=on")
     fi
 
-    # ── KVM detection ─────────────────────────────────────────────────
     KVM_ARGS=()
     if [ -w /dev/kvm ]; then
       KVM_ARGS+=("-enable-kvm" "-cpu" "host")
@@ -438,7 +419,6 @@ pkgs.writeShellApplication {
       KVM_ARGS+=("-cpu" "max")
     fi
 
-    # ── Start the winsize bridge ───────────────────────────────────────
     # socat itself retries the UNIX-CONNECT until QEMU binds the socket,
     # so no polling loop is needed.
     socat -u "PIPE:$WINSIZE_FIFO" "UNIX-CONNECT:$WINSIZE_SOCK,retry=100,interval=0.1" 2>/dev/null &
@@ -448,7 +428,6 @@ pkgs.writeShellApplication {
     }
     CLEANUP_FUNCS+=(cleanup_socat)
 
-    # ── Launch QEMU ───────────────────────────────────────────────────
     qemu-system-${arch} \
       "''${KVM_ARGS[@]}" \
       -m "$MEM" \

@@ -1,5 +1,5 @@
 {
-  description = "llm-jail — QEMU MicroVM sandbox for coding agents";
+  description = "llm-jail - QEMU MicroVM sandbox for coding agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -18,7 +18,7 @@
       mkTool = system: toolName: toolDef:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          # Default tool packages — overridable via `.override { claude-code = ...; }`
+          # Default tool packages - overridable via `.override { claude-code = ...; }`
           # on the resulting runner derivation. Consumers can swap any of these
           # without forking the flake.
           defaultArgs = {

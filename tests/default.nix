@@ -9,7 +9,7 @@ let
         imports = [ guestModule ];
         _module.args = { inherit nixpkgs claude-code codex-cli copilot-cli; };
 
-        # Override 9p filesystem entries from common.nix — the test framework
+        # Override 9p filesystem entries from common.nix - the test framework
         # provides its own root and /nix/store via virtualisation options.
         fileSystems."/.nix-lower/store" = lib.mkForce {
           device = "tmpfs";
@@ -31,7 +31,7 @@ let
           "f /llmjail-env/allowed-domains 0644 root root -"
         ];
 
-        # Tool service will fail without credentials — prevent it from
+        # Tool service will fail without credentials - prevent it from
         # blocking boot or powering off the VM.
         systemd.services.llmjail-tool = {
           wantedBy = lib.mkForce [ ];

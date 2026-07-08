@@ -1,7 +1,6 @@
 { config, lib, pkgs, nixpkgs, ... }:
 
 {
-  # ── Tool options (set by each guest module) ─────────────────────────────
   options.llmjail = {
     toolBinary = lib.mkOption {
       type = lib.types.either lib.types.str lib.types.package;
@@ -14,7 +13,6 @@
   };
 
   config = {
-    # ── Boot ──────────────────────────────────────────────────────────────
     boot.loader.grub.enable = false;
     # Switch to systemd-initrd (default in 26.11). Required because we use
     # boot.initrd.systemd.services below to set up the /nix/store overlay.
@@ -41,7 +39,7 @@
     # initrd-fs.target so stage 2 sees the overlay. The backing device
     # (ext4 disk or tmpfs) is chosen at runtime from llmjail.store_disk=1
     # on the kernel cmdline. The 9p mount is used directly as the overlay
-    # lower layer — overlayfs does not reliably cross submount boundaries,
+    # lower layer - overlayfs does not reliably cross submount boundaries,
     # so the lower must be the mounted filesystem itself. /nix/var is
     # bind-mounted from the backing so build artifacts land there instead
     # of the root tmpfs.
@@ -49,7 +47,7 @@
       description = "Set up /nix/store overlay and /nix/var bind";
       # Pulled in by initrd-fs.target AND by initrd-find-nixos-closure.service
       # (the latter races us in 26.05+ and inspects /sysroot/nix/store before
-      # the overlay exists — so we must complete before it starts).
+      # the overlay exists - so we must complete before it starts).
       wantedBy = [ "initrd-fs.target" "initrd-find-nixos-closure.service" ];
       before = [ "initrd-fs.target" "initrd-find-nixos-closure.service" ];
       unitConfig = {
@@ -94,7 +92,6 @@
       '';
     };
 
-    # ── Filesystems ───────────────────────────────────────────────────────
     fileSystems."/" = {
       device = "tmpfs";
       fsType = "tmpfs";
@@ -113,7 +110,6 @@
     # /nix/store overlay and /nix/var bind-mount are done by the
     # llmjail-store-overlay initrd service (above) which orders itself
     # after the 9p lower layer is mounted.
-
     fileSystems."/llmjail-env" = {
       device = "envfs";
       fsType = "9p";
@@ -121,7 +117,6 @@
       neededForBoot = true;
     };
 
-    # ── Networking ────────────────────────────────────────────────────────
     networking.useDHCP = false;
     networking.nameservers = [ "10.0.2.3" ];
     networking.firewall.enable = false;
@@ -144,7 +139,6 @@
       wait-online.enable = true;
     };
 
-    # ── User ──────────────────────────────────────────────────────────────
     users.users.user = {
       isNormalUser = true;
       uid = 1000;
@@ -173,7 +167,6 @@
       };
     };
 
-    # ── llmjail-mounts service ───────────────────────────────────────────
     # Parses kernel cmdline for llmjail.mounts=tag0:/path:rw,tag1:/path:ro,...
     # and mounts each entry via 9p.
     systemd.services.llmjail-mounts = {
@@ -232,7 +225,7 @@
           ${pkgs.coreutils}/bin/chown user:users "/home/user/$name"
         done
 
-        # ── Apply --mask patterns to user-data roots ────────────────
+        # Apply --mask patterns to user-data roots.
         # Bind-mounts an empty dir/file over each matched path so the
         # tool sees no contents (the name stays visible, only contents
         # are hidden). Static: applied once at boot. New files matching
@@ -287,7 +280,6 @@
       '';
     };
 
-    # ── Common packages available in every guest ─────────────────────────
     environment.systemPackages = with pkgs; [
       git
       nodejs
@@ -304,7 +296,6 @@
       nftables
     ];
 
-    # ── llmjail-net-filter service ─────────────────────────────────────
     # Configures DNS whitelist (dnsmasq) and port-level firewall (nftables)
     # when llmjail.net_filter=1 is set on the kernel cmdline.
     systemd.services.llmjail-net-filter = {
@@ -320,7 +311,6 @@
       script = ''
         set -euo pipefail
 
-        # Check kernel cmdline for net_filter flag
         NET_FILTER=0
         for arg in $(cat /proc/cmdline); do
           case "$arg" in
@@ -333,7 +323,6 @@
           exit 0
         fi
 
-        # ── Apply nftables firewall rules ───────────────────────────
         # Must run before dnsmasq so allowed_ips set exists when
         # dnsmasq populates it on first DNS resolution.
         ${pkgs.nftables}/bin/nft -f - <<'NFTEOF'
@@ -342,7 +331,7 @@
           # HTTP/HTTPS is only allowed to IPs that appear here, blocking
           # direct hardcoded-IP connections that bypass DNS filtering.
           # Plain set (no `flags interval`) so dnsmasq can add individual
-          # /32 entries — interval sets reject single addresses in some
+          # /32 entries - interval sets reject single addresses in some
           # nft/dnsmasq combos.
           set allowed_ips {
             type ipv4_addr
@@ -351,29 +340,22 @@
           chain output {
             type filter hook output priority 0; policy drop;
 
-            # Allow loopback
             oifname "lo" accept
 
-            # Allow established/related
             ct state established,related accept
 
-            # Allow DHCP
             udp dport { 67, 68 } accept
 
-            # Allow DNS from dnsmasq to QEMU DNS
             ip daddr 10.0.2.3 udp dport 53 accept
             ip daddr 10.0.2.3 tcp dport 53 accept
 
-            # Allow outbound HTTP/HTTPS only to DNS-resolved allowed IPs
             ip daddr @allowed_ips tcp dport { 80, 443 } accept
 
-            # Drop everything else
             log prefix "llmjail-drop: " drop
           }
         }
         NFTEOF
 
-        # ── Generate dnsmasq config ─────────────────────────────────
         DNSMASQ_CONF="/etc/dnsmasq-llmjail.conf"
         {
           echo "no-resolv"
@@ -391,10 +373,9 @@
             done < /llmjail-env/allowed-domains
           fi
 
-          # No default upstream — unmatched queries get REFUSED
+          # No default upstream - unmatched queries get REFUSED
         } > "$DNSMASQ_CONF"
 
-        # ── Start dnsmasq ───────────────────────────────────────────
         # --user=root keeps CAP_NET_ADMIN for the lifetime of the daemon;
         # dnsmasq otherwise drops to "nobody" and nftset updates fail
         # silently. We're inside a jail VM, root for dnsmasq is fine.
@@ -407,14 +388,12 @@
           --log-queries=extra \
           --log-facility=-
 
-        # ── Point resolv.conf at local dnsmasq ──────────────────────
         echo "nameserver 127.0.0.1" > /etc/resolv.conf
 
         echo "Network filtering enabled with $(${pkgs.coreutils}/bin/wc -l < /llmjail-env/allowed-domains) allowed domain(s)."
       '';
     };
 
-    # ── llmjail-winsize service ──────────────────────────────────────────
     # Reads "cols rows" lines from a dedicated virtio-serial port
     # (`llmjail.winsize`) published by the host runner and applies them to
     # /dev/ttyS0 via stty. TIOCSWINSZ delivers SIGWINCH to ttyS0's foreground
@@ -447,7 +426,6 @@
       '';
     };
 
-    # ── llmjail-tool service ────────────────────────────────────────────
     systemd.services.llmjail-tool =
       let
         launcher = pkgs.writeShellScript "launch-tool" ''
@@ -461,9 +439,8 @@
             export PATH="/host-sw/bin:$PATH"
           fi
 
-          # Source nix develop environment if available
           if [ -f /llmjail-env/dev-env ]; then
-            # dev-env is output of `nix print-dev-env` — a bash script setting PATH, etc.
+            # dev-env is output of `nix print-dev-env` - a bash script setting PATH, etc.
             # shellcheck disable=SC1091
             source /llmjail-env/dev-env
           fi
@@ -513,8 +490,6 @@
         };
       };
 
-    # ── Disable unnecessary services ─────────────────────────────────────
-    # No getty on serial — tool service owns the TTY
     systemd.services."serial-getty@ttyS0".enable = false;
     systemd.services."serial-getty@ttyS1".enable = false;
     systemd.services."getty@tty1".enable = false;
@@ -523,10 +498,7 @@
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
     nix.settings.sandbox = false;
 
-    # Pin nixpkgs so `nix shell nixpkgs#...` and `nix-shell -p ...` resolve
-    # to the same nixpkgs used to build this system.  The store path is part
-    # of the system closure (GC root) — it cannot be collected while the VM
-    # runner script exists, preventing stale 9p cache hits on GC'd paths.
+    # Pin nixpkgs within the VM
     nix.registry.nixpkgs.flake = nixpkgs;
     nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
 

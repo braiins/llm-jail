@@ -7,7 +7,7 @@
       configEnvVar = "CLAUDE_CONFIG_DIR";
       allowedDomains = [
         "api.anthropic.com"
-        # OAuth login flows (claude.ai and Console accounts) — needed for the
+        # OAuth login flows (claude.ai and Console accounts) - needed for the
         # first-run login inside the jail
         "claude.ai"
         "platform.claude.com"
@@ -35,8 +35,8 @@
     guestModule = ./guests/shell.nix;
     defaults = {
       mem = 2048; vcpu = 2;
-      # No config dir — the debug shell keeps no persistent state.
-      # No domains whitelisted by default — debug shell runs offline unless
+      # No config dir - the debug shell keeps no persistent state.
+      # No domains whitelisted by default - debug shell runs offline unless
       # the user opts in with --allow-domain or --no-net-filter.
       allowedDomains = [ ];
     };
