@@ -275,6 +275,13 @@
             ${pkgs.findutils}/bin/find "$root" -xdev \( "''${EXPR[@]}" \) -prune -print0 |
               while IFS= read -r -d "" target; do
                 [ "$target" = "$root" ] && continue
+                # Skip symlinks: mount --bind resolves the link, and we don't
+                # want to mask the target instead of the link itself.
+                # Notify the user and skip.
+                if [ -L "$target" ]; then
+                  echo "mask: skipping symlink (not masked): $target"
+                  continue
+                fi
                 if [ -d "$target" ]; then
                   ${pkgs.util-linux}/bin/mount --bind /run/llmjail-mask/empty-dir "$target"
                 elif [ -e "$target" ]; then
