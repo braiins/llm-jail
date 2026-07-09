@@ -346,8 +346,8 @@
 
             udp dport { 67, 68 } accept
 
-            ip daddr 10.0.2.3 udp dport 53 accept
-            ip daddr 10.0.2.3 tcp dport 53 accept
+            ip daddr 10.0.2.3 udp dport 53 meta skuid root accept
+            ip daddr 10.0.2.3 tcp dport 53 meta skuid root accept
 
             ip daddr @allowed_ips tcp dport { 80, 443 } accept
 
