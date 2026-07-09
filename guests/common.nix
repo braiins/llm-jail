@@ -30,7 +30,7 @@
     # autoload, but the systemd-initrd path doesn't always trigger it for
     # `mount -t overlay`, so make it explicit.
     boot.initrd.kernelModules = [ "overlay" ];
-    boot.kernelModules = [ "nf_tables" ];
+    boot.kernelModules = [ "nf_tables" "virtio_console" ];
 
     boot.initrd.supportedFilesystems = [ "ext4" ];
 
@@ -100,10 +100,12 @@
 
     # Host nix store read-only (lower layer for the /nix/store overlay above).
     # Mounted outside /nix so it isn't hidden when the overlay covers /nix/store.
+    # msize=1M: the 8KB default round-trips every read/readdir/stat beyond it,
+    # crippling metadata-heavy tool I/O on large workspaces.
     fileSystems."/.nix-lower/store" = {
       device = "nix-store";
       fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "ro" ];
+      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
       neededForBoot = true;
     };
 
@@ -113,7 +115,7 @@
     fileSystems."/llmjail-env" = {
       device = "envfs";
       fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=none" "ro" ];
+      options = [ "trans=virtio" "version=9p2000.L" "cache=none" "msize=1048576" "ro" ];
       neededForBoot = true;
     };
 
@@ -200,11 +202,11 @@
           echo "Mounting $tag -> $mpath ($mode)"
           ${pkgs.coreutils}/bin/mkdir -p "$mpath"
 
-          OPTS="trans=virtio,version=9p2000.L,cache=mmap"
+          OPTS="trans=virtio,version=9p2000.L,cache=mmap,msize=1048576"
           if [ "$mode" = "ro" ]; then
             OPTS="$OPTS,ro"
           elif [ "$mode" = "ro-nocache" ]; then
-            OPTS="trans=virtio,version=9p2000.L,cache=none,ro"
+            OPTS="trans=virtio,version=9p2000.L,cache=none,msize=1048576,ro"
           fi
           ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
 
@@ -394,10 +396,9 @@
       '';
     };
 
-    # Reads "cols rows" lines from a dedicated virtio-serial port
-    # (`llmjail.winsize`) published by the host runner and applies them to
-    # /dev/ttyS0 via stty. TIOCSWINSZ delivers SIGWINCH to ttyS0's foreground
-    # process group, so the TUI resizes live without any QEMU patches.
+    # Applies host-published terminal sizes to /dev/hvc0 via TIOCSWINSZ. tty
+    # core handles the ioctl (driver-independent), so it delivers SIGWINCH to
+    # hvc0's foreground pgrp just as it did for ttyS0.
     systemd.services.llmjail-winsize = {
       description = "Apply terminal size updates from host via virtio-serial";
       wantedBy = [ "multi-user.target" ];
@@ -421,7 +422,7 @@
           [ -n "$COLS" ] && [ -n "$ROWS" ] || continue
           [ "$COLS $ROWS" = "$PREV" ] && continue
           PREV="$COLS $ROWS"
-          ${pkgs.coreutils}/bin/stty cols "$COLS" rows "$ROWS" < /dev/ttyS0 2>/dev/null || true
+          ${pkgs.coreutils}/bin/stty cols "$COLS" rows "$ROWS" < /dev/hvc0 2>/dev/null || true
         done < /dev/virtio-ports/llmjail.winsize
       '';
     };
@@ -468,8 +469,7 @@
 
           # Apply the initial terminal size synchronously BEFORE exec so the
           # TUI sees a non-zero TIOCGWINSZ on first read. Dynamic resizes
-          # after this point are handled by the llmjail-winsize side-channel
-          # service. (stdin is /dev/ttyS0 via systemd TTYPath.)
+          # after this are handled by the llmjail-winsize side-channel.
           if [ -n "''${COLUMNS:-}" ] && [ -n "''${LINES:-}" ]; then
             ${pkgs.coreutils}/bin/stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
           fi
@@ -491,7 +491,7 @@
           StandardInput = "tty";
           StandardOutput = "tty";
           StandardError = "tty";
-          TTYPath = "/dev/ttyS0";
+          TTYPath = "/dev/hvc0";
           TTYReset = true;
           TTYVHangup = false;
           ExecStart = "${launcher}";
@@ -501,7 +501,9 @@
 
     systemd.services."serial-getty@ttyS0".enable = false;
     systemd.services."serial-getty@ttyS1".enable = false;
+    systemd.services."serial-getty@hvc0".enable = false;
     systemd.services."getty@tty1".enable = false;
+    systemd.services."getty@hvc0".enable = false;
 
     documentation.enable = false;
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
