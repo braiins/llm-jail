@@ -46,7 +46,7 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 
 ## First run & authentication
 
-Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`). Your real `~/.claude`, `~/.codex`, and `~/.copilot` are never mounted or read.
+Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, or `ZDOTDIR` for the shell). Your real `~/.claude`, `~/.codex`, and `~/.copilot` are never mounted or read.
 
 On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir - that's expected, there is no keychain in the guest.
 
@@ -57,7 +57,7 @@ nix run .#claude -- --profile client1
 nix run .#claude -- --profile client2
 ```
 
-> **Changed semantics (migration note):** `--config-dir` used to share a host config directory into the jail read-only. It now designates a jail-private directory that is mounted **read-write**. Do not point it at a directory your host tool also uses - a compromised agent could write hooks or settings there that your host tool would later execute. Use a profile instead. If you want to reuse an existing host login rather than logging in fresh, you can copy it in at your own risk: `cp -a ~/.claude/. ~/.config/llm-jail/claude/default/` (note that host and jail will then refresh the same OAuth token independently).
+> **Renamed (migration note):** `--config-dir` is now `--state-dir` (the jail-private state **root** directory, mounted **read-write**; `<tool>/<profile>` is appended beneath it). The old `--config-dir` flag is rejected; the `LLMJAIL_CONFIG_DIR` env var still works but is deprecated (use `LLMJAIL_STATE_DIR`). Do not point it at a directory your host tool also uses - a compromised agent could write hooks or settings there that your host tool would later execute. If you want to reuse an existing host login rather than logging in fresh, you can copy it in at your own risk: `cp -a ~/.claude/. ~/.config/llm-jail/claude/default/` (note that host and jail will then refresh the same OAuth token independently).
 
 ## Usage
 
@@ -70,8 +70,8 @@ llm-jail-{claude,codex,copilot,shell} [options] [-- tool-args...]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--dangerous` | Enable the tool's dangerous / unattended mode | off |
-| `--profile NAME` | Tool state profile under `~/.config/llm-jail/<tool>/` | `default` |
-| `--config-dir PATH` | Tool state directory, mounted read-write; overrides `--profile` | `~/.config/llm-jail/<tool>/default` |
+| `--profile NAME` | State profile, a subdir of `--state-dir/<tool>` | `default` |
+| `--state-dir PATH` | Jail state root dir, mounted read-write | `~/.config/llm-jail` |
 | `--immutable` | Mount workspace as read-only | off |
 | `--tmpdir PATH` | Directory to use for runtime data | `${TMPDIR:-/tmp}` |
 | `--mount PATH` | Extra read-write mount (repeatable) | - |
@@ -145,7 +145,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
 
 - The current working directory -> `/workspace` (read-write)
-- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, or `.copilot` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`)
+- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, or `.shell` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`/`XDG_DATA_HOME`/`ZDOTDIR`)
 - `~/.gitconfig` is copied in (9p cannot mount single files)
 - Host system and user packages -> `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`

@@ -34,8 +34,12 @@
   shell = {
     guestModule = ./guests/shell.nix;
     defaults = {
-      mem = 2048; vcpu = 2;
-      # No config dir - the debug shell keeps no persistent state.
+      mem = 2048;
+      vcpu = 2;
+      # Shell state dir mounted to ~/.shell, ZDOTDIR specifies zsh config file location,
+      # no equivalent option exists for bash :'(
+      configDirName = ".shell";
+      configEnvVar = "ZDOTDIR";
       # No domains whitelisted by default - debug shell runs offline unless
       # the user opts in with --allow-domain or --no-net-filter.
       allowedDomains = [ ];

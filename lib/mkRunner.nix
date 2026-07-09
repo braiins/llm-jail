@@ -9,15 +9,6 @@ let
   toplevel = guest.config.system.build.toplevel;
   qemuPkg = pkgs.qemu_kvm;
   arch = if pkgs.stdenv.hostPlatform.isx86_64 then "x86_64" else "aarch64";
-  # Tools without a configDirName (e.g. the debug shell) keep no state:
-  # the runner script contains no config-dir handling at all.
-  hasConfigDir = toolDefaults ? configDirName;
-  # Double-quoted so the two-space option indentation survives Nix's
-  # indented-string stripping when interpolated into the usage heredoc.
-  configUsage = pkgs.lib.optionalString hasConfigDir (
-    "  --profile NAME        Tool state profile under ~/.config/llm-jail/${name}/ (default: default)\n"
-    + "  --config-dir PATH     Tool state directory, mounted read-write; overrides --profile\n"
-  );
 in
 pkgs.writeShellApplication {
   name = "llm-jail-${name}";
@@ -39,15 +30,18 @@ pkgs.writeShellApplication {
     IMMUTABLE=0
     LLMJAIL_TMPDIR=''${TMPDIR:-/tmp}
     STORE_DISK=0
-    ${pkgs.lib.optionalString hasConfigDir ''
-      PROFILE="''${LLMJAIL_PROFILE:-default}"
-      CONFIG_DIR="''${LLMJAIL_CONFIG_DIR:-}"
-    ''}
     NET_FILTER=1
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
     MASK_PATTERNS=()
     TOOL_ARGS=()
+
+    PROFILE="''${LLMJAIL_PROFILE:-default}"
+    STATE_DIR="''${LLMJAIL_STATE_DIR:-}"
+    if [ -z "$STATE_DIR" ] && [ -n "''${LLMJAIL_CONFIG_DIR:-}" ]; then
+      echo "WARNING: LLMJAIL_CONFIG_DIR is deprecated; use LLMJAIL_STATE_DIR. LLMJAIL_STATE_DIR will be mounted as read-write" >&2
+      STATE_DIR="$LLMJAIL_CONFIG_DIR"
+    fi
 
     usage() {
       cat <<'USAGE'
@@ -55,7 +49,9 @@ pkgs.writeShellApplication {
 
     Options:
       --dangerous           Enable the tool's dangerous / unattended mode
-    ${configUsage}  --immutable           Mount workspace as read-only instead of read-write
+      --profile NAME        State profile, a subdir of --state-dir/<tool> (default: default)
+      --state-dir PATH      Jail state root dir (default: ~/.config/llm-jail)
+      --immutable           Mount workspace as read-only instead of read-write
       --tmpdir PATH         Directory to use for runtime data (default: ''${TMPDIR:-/tmp})
       --mount PATH          Extra read-write mount at same path in guest (repeatable)
       --ro-mount PATH       Extra read-only mount at same path in guest (repeatable)
@@ -95,10 +91,11 @@ pkgs.writeShellApplication {
       case "$1" in
         --dangerous)   DANGEROUS=1; shift ;;
         --dev-env)     DEV_ENV=1; shift ;;
-    ${pkgs.lib.optionalString hasConfigDir ''
         --profile)     PROFILE="$2"; shift 2 ;;
-        --config-dir)  CONFIG_DIR="$2"; shift 2 ;;
-    ''}
+        --state-dir)   STATE_DIR="$2"; shift 2 ;;
+        --config-dir|--config-dir=*)
+                       echo "ERROR: --config-dir has been renamed to --state-dir and will be mounted as read-write." >&2
+                       exit 1 ;;
         --mount)       EXTRA_MOUNTS+=("$2:rw"); shift 2 ;;
         --ro-mount)    EXTRA_MOUNTS+=("$2:ro"); shift 2 ;;
         --tmpdir)      LLMJAIL_TMPDIR="$2"; shift 2 ;;
@@ -115,13 +112,13 @@ pkgs.writeShellApplication {
       esac
     done
 
-    ${pkgs.lib.optionalString hasConfigDir ''
-      # Jail-private tool state, fully separate from the host tool's own
-      # config dir. --config-dir / LLMJAIL_CONFIG_DIR overrides --profile.
-      if [ -z "$CONFIG_DIR" ]; then
-        CONFIG_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/llm-jail/${name}/$PROFILE"
-      fi
-    ''}
+    # Jail-private tool state, fully separate from the host tool's own
+    # config dir. --state-dir / LLMJAIL_STATE_DIR overrides the default
+    # jail state root (~/.config/llm-jail); <tool>/<profile> is appended.
+    if [ -z "$STATE_DIR" ]; then
+      STATE_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/llm-jail"
+    fi
+    STATE_DIR="$STATE_DIR/${name}/$PROFILE"
 
     if [ ! -d "$LLMJAIL_TMPDIR" ]; then
       echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
@@ -253,10 +250,9 @@ pkgs.writeShellApplication {
 
       echo "HOME=/home/user"
       echo "LLMJAIL_DANGEROUS=$DANGEROUS"
-    ${pkgs.lib.optionalString hasConfigDir ''
-      # Relocate the tool's state into the jail-private config mount
+      # Relocate the tool's state into the jail-private state mount
       echo "${toolDefaults.configEnvVar}=/home/user/${toolDefaults.configDirName}"
-    ''}} > "$ENV_FILE"
+    } > "$ENV_FILE"
 
     # Write tool args as null-separated file to preserve argument boundaries
     if [ ''${#TOOL_ARGS[@]} -gt 0 ]; then
@@ -336,13 +332,11 @@ pkgs.writeShellApplication {
     fi
     MASK_ROOTS+=("/workspace")
 
-    ${pkgs.lib.optionalString hasConfigDir ''
-      validate_path "$CONFIG_DIR" "config directory"
-      # 9p refuses to share a non-existent path; first run starts empty and
-      # the tool goes through its login/onboarding flow inside the jail.
-      mkdir -p "$CONFIG_DIR"
-      add_mount "$CONFIG_DIR" "/home/user/${toolDefaults.configDirName}" "rw"
-    ''}
+    validate_path "$STATE_DIR" "state directory"
+    # 9p refuses to share a non-existent path; first run starts empty and
+    # the tool goes through its login/onboarding flow inside the jail.
+    mkdir -p "$STATE_DIR"
+    add_mount "$STATE_DIR" "/home/user/${toolDefaults.configDirName}" "rw"
 
     # Copy .gitconfig into the envfs share (9p can't mount single files)
     if [ -f "$HOME/.gitconfig" ]; then
