@@ -6,14 +6,19 @@
     claude-code-nix.url = "github:sadjow/claude-code-nix";
     codex-cli-nix.url = "github:sadjow/codex-cli-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
+    autolith.url = "github:luciusmagn/autolith";
   };
 
-  outputs = { self, nixpkgs, claude-code-nix, codex-cli-nix, llm-agents, ... }@inputs:
+  outputs = { self, nixpkgs, claude-code-nix, codex-cli-nix, llm-agents, autolith, ... }@inputs:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       tools = import ./tools.nix;
 
       forAllSystems = f: nixpkgs.lib.genAttrs supportedSystems f;
+      toolsForSystem = system:
+        nixpkgs.lib.filterAttrs
+          (_: def: builtins.elem system (def.systems or supportedSystems))
+          tools;
 
       mkTool = system: toolName: toolDef:
         let
@@ -26,12 +31,13 @@
             codex-cli = codex-cli-nix.packages.${system}.default;
             copilot-cli = llm-agents.packages.${system}.copilot-cli;
             opencode = llm-agents.packages.${system}.opencode;
+            autolith = autolith.packages.${system}.default;
           };
-        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli, opencode }:
+        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli, opencode, autolith }:
           let
             guest = nixpkgs.lib.nixosSystem {
               inherit system;
-              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli opencode; };
+              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli opencode autolith; };
               modules = [
                 toolDef.guestModule
                 { nixpkgs.config.allowUnfree = true; }
@@ -46,14 +52,14 @@
 
     in {
       packages = forAllSystems (system:
-        nixpkgs.lib.mapAttrs (name: def: mkTool system name def) tools
+        nixpkgs.lib.mapAttrs (name: def: mkTool system name def) (toolsForSystem system)
       );
 
       apps = forAllSystems (system:
         nixpkgs.lib.mapAttrs (name: _: {
           type = "app";
           program = "${self.packages.${system}.${name}}/bin/llm-jail-${name}";
-        }) tools
+        }) (toolsForSystem system)
       );
 
       checks = forAllSystems (system:
@@ -67,6 +73,7 @@
           codex-cli = codex-cli-nix.packages.${system}.default;
           copilot-cli = llm-agents.packages.${system}.copilot-cli;
           opencode = llm-agents.packages.${system}.opencode;
+          autolith = autolith.packages.${system}.default;
         }
       );
     };

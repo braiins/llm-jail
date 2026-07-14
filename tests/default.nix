@@ -1,4 +1,4 @@
-{ pkgs, nixpkgs, claude-code, codex-cli, copilot-cli, opencode }:
+{ pkgs, nixpkgs, claude-code, codex-cli, copilot-cli, opencode, autolith ? null }:
 
 let
   mkSmokeTest = { name, guestModule, toolBinary }:
@@ -7,7 +7,7 @@ let
 
       nodes.machine = { lib, ... }: {
         imports = [ guestModule ];
-        _module.args = { inherit nixpkgs claude-code codex-cli copilot-cli opencode; };
+        _module.args = { inherit nixpkgs claude-code codex-cli copilot-cli opencode autolith; };
 
         # Override 9p filesystem entries from common.nix - the test framework
         # provides its own root and /nix/store via virtualisation options.
@@ -179,4 +179,11 @@ in
   };
 
   net-filter-smoke = netFilterTest;
+}
+// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
+  autolith-smoke = mkSmokeTest {
+    name = "autolith";
+    guestModule = ../guests/autolith.nix;
+    toolBinary = pkgs.lib.getExe autolith;
+  };
 }

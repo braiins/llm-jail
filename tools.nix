@@ -70,6 +70,19 @@
       ];
     };
   };
+  autolith = {
+    guestModule = ./guests/autolith.nix;
+    systems = [ "x86_64-linux" ];
+    defaults = {
+      mem = 4096; vcpu = 2;
+      configDirName = ".autolith";
+      configEnvVar = "AUTOLITH_HOME";
+      allowedDomains = [
+        "auth.openai.com"
+        "chatgpt.com"
+      ];
+    };
+  };
   shell = {
     guestModule = ./guests/shell.nix;
     defaults = {
