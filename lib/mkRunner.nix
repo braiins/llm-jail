@@ -31,6 +31,7 @@ pkgs.writeShellApplication {
     LLMJAIL_TMPDIR=''${TMPDIR:-/tmp}
     STORE_DISK=0
     NET_FILTER=1
+    SKILLS_MODE=ro
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
     MASK_PATTERNS=()
@@ -65,6 +66,8 @@ pkgs.writeShellApplication {
       --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
       --allow-domain DOMAIN Add domain to network whitelist (repeatable)
       --no-net-filter       Disable network filtering (unrestricted access)
+      --skills none|ro|rw   Pass host ~/.claude/skills and ~/.agents/skills into the
+                            jail (default: ro). none=skip, ro=read-only, rw=read-write.
       --mem SIZE            Memory in MB (default: ${toString toolDefaults.mem})
       --vcpu COUNT          vCPUs (default: ${toString toolDefaults.vcpu})
       -h, --help            Show this help
@@ -102,6 +105,7 @@ pkgs.writeShellApplication {
         --immutable)    IMMUTABLE=1; shift ;;
         --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
         --no-net-filter) NET_FILTER=0; shift ;;
+        --skills)      SKILLS_MODE="$2"; shift 2 ;;
         --mask)        MASK_PATTERNS+=("$2"); shift 2 ;;
         --store-disk)  STORE_DISK="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
@@ -119,6 +123,11 @@ pkgs.writeShellApplication {
       STATE_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/llm-jail"
     fi
     STATE_DIR="$STATE_DIR/${name}/$PROFILE"
+
+    case "$SKILLS_MODE" in
+      none|ro|rw) ;;
+      *) echo "ERROR: --skills must be one of: none, ro, rw (got: $SKILLS_MODE)" >&2; exit 1 ;;
+    esac
 
     if [ ! -d "$LLMJAIL_TMPDIR" ]; then
       echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
@@ -337,6 +346,33 @@ pkgs.writeShellApplication {
     # the tool goes through its login/onboarding flow inside the jail.
     mkdir -p "$STATE_DIR"
     add_mount "$STATE_DIR" "/home/user/${toolDefaults.configDirName}" "rw"
+
+    # Pass host skill directories into the jail via direct 9p mounts.
+    # Tools like opencode and claude code discover skills at
+    # ~/.claude/skills/**/SKILL.md and ~/.agents/skills/**/SKILL.md
+    # inside the guest. ro is the default: skills are shared read-only,
+    # the jail cannot modify the host copy. rw allows in-jail edits to
+    # land back on the host (use with caution).
+    #
+    # Symlinks are resolved so skills managed by external tools (jolene,
+    # etc.) work: each symlink target is mounted individually at the
+    # expected guest path.
+    if [ "$SKILLS_MODE" != "none" ]; then
+      for skill_src in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
+        if [ -d "$skill_src" ]; then
+          parent=$(basename "$(dirname "$skill_src")")
+          guest_base="/home/user/$parent/skills"
+          for entry in "$skill_src"/*; do
+            [ -e "$entry" ] || continue
+            name=$(basename "$entry")
+            real=$(readlink -f "$entry" 2>/dev/null || true)
+            [ -n "$real" ] && [ -d "$real" ] || continue
+            validate_path "$real" "skill $name ($parent)"
+            add_mount "$real" "$guest_base/$name" "$SKILLS_MODE"
+          done
+        fi
+      done
+    fi
 
     # Copy .gitconfig into the envfs share (9p can't mount single files)
     if [ -f "$HOME/.gitconfig" ]; then
