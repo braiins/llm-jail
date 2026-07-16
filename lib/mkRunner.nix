@@ -155,20 +155,17 @@ pkgs.writeShellApplication {
     # TIOCSWINSZ support") that adds native SIGWINCH->virtconsole
     # forwarding. When those patches land upstream and reach nixpkgs,
     # this entire side-channel (FIFO, socat bridge, virtio-serial
-    # chardev, and the guest llmjail-winsize service) can be replaced
-    # by switching to -chardev console + hvc0 with the resize flag.
+    # chardev, and the guest llmjail-winsize service) can be dropped in
+    # favor of the resize flag on the virtconsole chardev itself.
     #
-    # Stock QEMU has no SIGWINCH->virtio-console forwarding, so we run a
-    # dedicated virtio-serial port (llmjail.winsize) as a unix-socket
-    # chardev and push "cols rows" lines through it on every SIGWINCH.
-    # The guest's llmjail-winsize service reads the port and issues
-    # TIOCSWINSZ on /dev/ttyS0, delivering SIGWINCH to the tool pgrp.
+    # Until then we push "cols rows" lines through a dedicated
+    # virtio-serial port on every SIGWINCH; the guest applies them via
+    # TIOCSWINSZ on /dev/hvc0.
     #
-    # QEMU runs in the foreground so stdin/stdout are cleanly wired to
-    # -serial mon:stdio. bash defers trap handlers until a synchronous
-    # foreground child exits, so a dedicated subshell owns the SIGWINCH
-    # trap and parks in `sleep & wait` - wait's trap-interrupt semantics
-    # fire the trap promptly on each resize.
+    # bash defers trap handlers until a synchronous foreground child
+    # exits, so a dedicated subshell owns the SIGWINCH trap and parks in
+    # `sleep & wait` - wait's trap-interrupt semantics fire the trap
+    # promptly on each resize.
     WINSIZE_SOCK="$RUNDIR/winsize.sock"
     WINSIZE_FIFO="$RUNDIR/winsize.fifo"
     mkfifo "$WINSIZE_FIFO"
@@ -422,6 +419,17 @@ pkgs.writeShellApplication {
     }
     CLEANUP_FUNCS+=(cleanup_socat)
 
+    # hvc0 (virtio-console) instead of ttyS0 (16550A): the UART transfers
+    # output byte-at-a-time through port IO + per-byte interrupts, which
+    # stutters on full-screen TUI redraws. virtio-console moves bulk frame
+    # data over a virtqueue. SIGWINCH still works via the winsize side-channel
+    # (TIOCSWINSZ is tty-core, driver-independent).
+    #
+    # -display none (not -nographic): we wire stdio explicitly via the mux
+    # chardev; -nographic assumes a single serial-on-stdio and conflicts.
+    # Two serials are kept so the kernel `console=ttyS1` resolves: ttyS0=null
+    # (unused now that the tool is on hvc0), ttyS1 -> kernel.log. Without
+    # ttyS1 present the console falls back to hvc0 and a getty grabs it.
     qemu-system-${arch} \
       "''${KVM_ARGS[@]}" \
       -m "$MEM" \
@@ -429,12 +437,15 @@ pkgs.writeShellApplication {
       -kernel ${toplevel}/kernel \
       -initrd ${toplevel}/initrd \
       -append "$KERNEL_PARAMS" \
-      -nographic \
-      -serial mon:stdio \
-      -serial file:"$RUNDIR/kernel.log" \
+      -display none \
+      -chardev stdio,id=cons0,mux=on \
+      -mon chardev=cons0,mode=readline \
       -device virtio-serial-pci \
+      -device virtconsole,chardev=cons0,nr=0 \
       -chardev "socket,id=winsize,path=$WINSIZE_SOCK,server=on,wait=off" \
       -device virtserialport,chardev=winsize,name=llmjail.winsize \
+      -serial null \
+      -serial file:"$RUNDIR/kernel.log" \
       -no-reboot \
       -device virtio-rng-pci \
       -nic user,model=virtio-net-pci \
