@@ -13,7 +13,6 @@
     fi
     for cand in zsh bash; do
       if command -v "$cand" >/dev/null 2>&1; then
-        [ "$cand" = zsh ] && ensure_zshrc
         exec "$cand" -l
       fi
     done

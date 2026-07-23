@@ -430,6 +430,14 @@
     systemd.services.llmjail-tool =
       let
         launcher = pkgs.writeShellScript "launch-tool" ''
+          # Re-exec under the $SHELL forwarded by mkRunner. Without --dev-env this
+          # honours the host shell; with --dev-env mkRunner overrides SHELL to
+          # bashInteractive so devShell shellHooks can source completion scripts
+          # that require readline builtins.
+          if [ -z "''${_LLMJAIL_REEXECED:-}" ] && [ -x "''${SHELL:-}" ]; then
+            _LLMJAIL_REEXECED=1 exec "$SHELL" "$0"
+          fi
+
           set -euo pipefail
 
           # Add host packages to PATH if available (NixOS host)
