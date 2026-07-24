@@ -179,6 +179,173 @@ in
   };
 
   net-filter-smoke = netFilterTest;
+
+  shell-smoke = mkSmokeTest {
+    name = "shell";
+    guestModule = ../guests/shell.nix;
+    toolBinary = pkgs.lib.getExe pkgs.bashInteractive;
+  };
+
+  dev-env-smoke =
+    let
+      # pkgs.writeText supports multi-line content; use C in tmpfiles.rules to
+      # copy these store paths into /llmjail-env, bypassing the neededForBoot
+      # ordering issue that a oneshot service would have.
+      envFile = pkgs.writeText "dev-env-smoke-env" ''
+        HOME=/home/user
+        SHELL=${pkgs.bashInteractive}/bin/bash
+      '';
+      devEnvContent = pkgs.writeText "dev-env-smoke-dev-env" ''
+        export LLMJAIL_TEST_VAR=hello
+      '';
+      mockTool = pkgs.writeShellScript "dev-env-checker" ''
+        echo "LLMJAIL_TEST_VAR=''${LLMJAIL_TEST_VAR:-<unset>}"
+      '';
+    in
+    pkgs.testers.nixosTest {
+      name = "llmjail-dev-env-smoke";
+
+      nodes.machine = { lib, ... }: {
+        imports = [ ../guests/shell.nix ];
+        _module.args = { inherit nixpkgs; };
+
+        llmjail.toolBinary = lib.mkForce mockTool;
+
+        fileSystems."/.nix-lower/store" = lib.mkForce {
+          device = "tmpfs"; fsType = "tmpfs"; options = [ "size=1M" ];
+        };
+        fileSystems."/llmjail-env" = lib.mkForce {
+          device = "tmpfs"; fsType = "tmpfs"; options = [ "size=10M" ];
+        };
+        boot.initrd.postMountCommands = lib.mkForce "";
+
+        # systemd-tmpfiles-setup runs in sysinit.target, before all application
+        # services.  The d entry creates /llmjail-env unconditionally (regardless
+        # of whether the tmpfs mount succeeded), and C copies multi-line content
+        # from Nix store paths without needing a separate oneshot service.
+        systemd.tmpfiles.rules = [
+          "d /llmjail-env 0755 root root -"
+          "C /llmjail-env/env 0644 root root - ${envFile}"
+          "C /llmjail-env/dev-env 0644 root root - ${devEnvContent}"
+          "f /llmjail-env/tool-args 0644 root root -"
+          "f /llmjail-env/allowed-domains 0644 root root -"
+          "d /workspace 0755 user users -"
+        ];
+
+        # Redirect I/O to journal, disable poweroff, and clear TTY settings.
+        # TTYPath=/dev/hvc0 and TTYReset=true survive the lib.mkForce on
+        # StandardInput because they are separate serviceConfig keys. If not
+        # cleared, systemd resets /dev/hvc0 on service exit, disrupting the
+        # test driver's backdoor shell which runs on the same device.
+        systemd.services.llmjail-tool = {
+          serviceConfig = {
+            StandardInput = lib.mkForce "null";
+            StandardOutput = lib.mkForce "journal";
+            StandardError = lib.mkForce "journal";
+            ExecStopPost = lib.mkForce "";
+            TTYPath = lib.mkForce "";
+            TTYReset = lib.mkForce false;
+          };
+        };
+
+        virtualisation.memorySize = 1024;
+      };
+
+      testScript = ''
+        machine.start()
+        machine.wait_for_unit("multi-user.target")
+
+        with subtest("dev-env variable reaches the tool binary"):
+            machine.wait_until_succeeds(
+                "journalctl -u llmjail-tool | grep 'LLMJAIL_TEST_VAR=hello'",
+                timeout=30
+            )
+      '';
+    };
+  completion-smoke =
+    let
+      envFile = pkgs.writeText "completion-smoke-env" ''
+        HOME=/home/user
+        SHELL=${pkgs.bashInteractive}/bin/bash
+      '';
+      devEnvScript = pkgs.writeText "completion-dev-env" ''
+        # Enable programmable completion (off by default in non-interactive bash)
+        shopt -s progcomp
+
+        # Pattern 1: wordlist completion (exercises: complete -W)
+        complete -W "start stop restart status" _llmjail_test_svc
+
+        # Pattern 2: function-based completion (exercises: complete -F, compgen -W)
+        _llmjail_test_fn() {
+          local cur="''${COMP_WORDS[COMP_CWORD]:-}"
+          COMPREPLY=( $(compgen -W "build test deploy --help" -- "$cur") )
+        }
+        complete -F _llmjail_test_fn _llmjail_test_app
+
+        # Pattern 3: modify options for a registered completion (exercises: compopt)
+        compopt -o nospace _llmjail_test_svc
+
+        # Verify compgen produces expected output, not just that it doesn't crash
+        RESULT=$(compgen -W "build test deploy --help" -- "dep")
+        [ "$RESULT" = "deploy" ]
+
+        export COMPLETION_BUILTINS_OK=1
+      '';
+      mockTool = pkgs.writeShellScript "completion-checker" ''
+        echo "COMPLETION_BUILTINS_OK=''${COMPLETION_BUILTINS_OK:-<unset>}"
+      '';
+    in
+    pkgs.testers.nixosTest {
+      name = "llmjail-completion-smoke";
+
+      nodes.machine = { lib, ... }: {
+        imports = [ ../guests/shell.nix ];
+        _module.args = { inherit nixpkgs; };
+
+        llmjail.toolBinary = lib.mkForce mockTool;
+
+        fileSystems."/.nix-lower/store" = lib.mkForce {
+          device = "tmpfs"; fsType = "tmpfs"; options = [ "size=1M" ];
+        };
+        fileSystems."/llmjail-env" = lib.mkForce {
+          device = "tmpfs"; fsType = "tmpfs"; options = [ "size=10M" ];
+        };
+        boot.initrd.postMountCommands = lib.mkForce "";
+
+        systemd.tmpfiles.rules = [
+          "d /llmjail-env 0755 root root -"
+          "C /llmjail-env/env 0644 root root - ${envFile}"
+          "C /llmjail-env/dev-env 0644 root root - ${devEnvScript}"
+          "f /llmjail-env/tool-args 0644 root root -"
+          "f /llmjail-env/allowed-domains 0644 root root -"
+          "d /workspace 0755 user users -"
+        ];
+
+        systemd.services.llmjail-tool = {
+          serviceConfig = {
+            StandardInput = lib.mkForce "null";
+            StandardOutput = lib.mkForce "journal";
+            StandardError = lib.mkForce "journal";
+            ExecStopPost = lib.mkForce "";
+            TTYPath = lib.mkForce "";
+            TTYReset = lib.mkForce false;
+          };
+        };
+
+        virtualisation.memorySize = 1024;
+      };
+
+      testScript = ''
+        machine.start()
+        machine.wait_for_unit("multi-user.target")
+
+        with subtest("completion builtins are available in the dev-env sourcing context"):
+            machine.wait_until_succeeds(
+                "journalctl -u llmjail-tool | grep 'COMPLETION_BUILTINS_OK=1'",
+                timeout=30
+            )
+      '';
+    };
 }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
   autolith-smoke = mkSmokeTest {
