@@ -11,6 +11,7 @@ Supported tools:
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
 | [opencode](https://opencode.ai) | `llm-jail-opencode` | `--auto` |
 | [Autolith](https://github.com/luciusmagn/autolith) (x86_64 only) | `llm-jail-autolith` | - |
+| [Pi](https://pi.dev) | `llm-jail-pi` | - |
 | Interactive shell (debugging) | `llm-jail-shell` | - |
 
 ## Requirements
@@ -39,6 +40,9 @@ nix run github:braiins/llm-jail#copilot
 # Run opencode
 nix run github:braiins/llm-jail#opencode
 
+# Run Pi
+nix run github:braiins/llm-jail#pi
+
 # Authenticate Autolith, then run it (x86_64 Linux only)
 nix run github:braiins/llm-jail#autolith -- -- --auth
 nix run github:braiins/llm-jail#autolith
@@ -55,9 +59,9 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 
 ## First run & authentication
 
-Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `AUTOLITH_HOME`, or `XDG_DATA_HOME` for opencode). Your real `~/.claude`, `~/.codex`, `~/.copilot`, and `~/.local/share/opencode` are never mounted or read.
+Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `AUTOLITH_HOME`, `XDG_DATA_HOME` for opencode, or `PI_CODING_AGENT_DIR` for Pi). Your real `~/.claude`, `~/.codex`, `~/.copilot`, `~/.local/share/opencode`, and `~/.pi` are never mounted or read.
 
-On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir - that's expected, there is no keychain in the guest. opencode doesn't prompt by itself - log in once with `nix run .#opencode -- -- auth login`. Authenticate Autolith explicitly with `nix run .#autolith -- -- --auth`; its first launch also builds pinned recovery and active Lisp images offline in the private state directory.
+On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir - that's expected, there is no keychain in the guest. opencode doesn't prompt by itself - log in once with `nix run .#opencode -- -- auth login`. Authenticate Autolith explicitly with `nix run .#autolith -- -- --auth`; its first launch also builds pinned recovery and active Lisp images offline in the private state directory. Pi has no explicit login command - launch it once with `nix run .#pi` and use its built-in `/login` flow; credentials persist in the jail-private state directory.
 
 Work for multiple clients by giving each its own profile, each with its own one-time login:
 
@@ -71,7 +75,7 @@ nix run .#claude -- --profile client2
 ## Usage
 
 ```
-llm-jail-{claude,codex,copilot,opencode,autolith,shell} [options] [-- tool-args...]
+llm-jail-{claude,codex,copilot,opencode,autolith,pi,shell} [options] [-- tool-args...]
 ```
 
 ### Options
@@ -154,7 +158,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
 
 - The current working directory -> `/workspace` (read-write)
-- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, or `.shell` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`/`XDG_DATA_HOME`/`AUTOLITH_HOME`/`ZDOTDIR`)
+- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, `.pi`, or `.shell` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`/`XDG_DATA_HOME`/`AUTOLITH_HOME`/`PI_CODING_AGENT_DIR`/`ZDOTDIR`)
 - `~/.gitconfig` is copied in (9p cannot mount single files)
 - Host system and user packages -> `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
@@ -190,6 +194,7 @@ Default allowed domains per tool:
 | Copilot | `github.com`, `api.github.com`, `api.individual.githubcopilot.com`, `copilot-proxy.githubusercontent.com`, `githubcopilot.com`, `collector.github.com`, … |
 | opencode | `models.dev`, `registry.npmjs.org`, plus the major hosted providers and their login flows: `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `api.openai.com`, `auth.openai.com`, `generativelanguage.googleapis.com`, `api.githubcopilot.com`, `openrouter.ai`, … (account-specific endpoints like Bedrock/Azure/Vertex need `--allow-domain`) |
 | Autolith | `auth.openai.com`, `chatgpt.com` |
+| Pi | `pi.dev`, `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `github.com`, `api.github.com`, `openrouter.ai`, `api.deepseek.com`, `api.mistral.ai`, `api.x.ai`, `api.groq.com`, `api.cerebras.ai` |
 
 > [!NOTE]
 > Outbound HTTP/HTTPS is restricted to IPs that the guest's dnsmasq resolved through a whitelisted domain - every successful lookup populates an nftables set (`allowed_ips`), and the firewall only accepts packets whose destination is in that set. Connections to hardcoded IPs that bypass DNS hit the default drop. IPv6 outbound traffic is dropped outright (no IPv6 rules). This is robust against accidental or prompt-injected exfiltration as long as the whitelisted domains themselves aren't bidirectional data channels - see the dangerous-mode warning below.
@@ -197,7 +202,7 @@ Default allowed domains per tool:
 ## Dangerous mode
 
 > [!CAUTION]
-> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex, `--yolo` for Copilot, `--auto` for opencode). The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
+> **Dangerous mode skips the tool's built-in permission prompts** (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex, `--yolo` for Copilot, `--auto` for opencode). Pi has no dangerous mode flag; project trust is set to `trusted` in the jail-private config so the tool does not prompt. The agent can execute arbitrary commands, write to any mounted directory, and make network requests without asking.
 >
 > Network filtering remains active in dangerous mode - the agent can only reach whitelisted domains. To grant unrestricted network access, use `--no-net-filter` (this is independent of `--dangerous`).
 >
@@ -241,7 +246,7 @@ No persistent disk images are involved. The guest kernel and initrd are built by
 
 ## Overriding tool packages
 
-Each runner is built with `lib.makeOverridable`, so the underlying tool package (`claude-code`, `codex-cli`, `copilot-cli`, `opencode`, or `autolith`) can be swapped without forking the flake:
+Each runner is built with `lib.makeOverridable`, so the underlying tool package (`claude-code`, `codex-cli`, `copilot-cli`, `opencode`, `autolith`, or `pi-coding-agent`) can be swapped without forking the flake:
 
 ```nix
 # flake.nix (consumer)

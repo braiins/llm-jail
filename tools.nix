@@ -117,4 +117,29 @@
       ];
     };
   };
+  pi = {
+    guestModule = ./guests/pi.nix;
+    defaults = {
+      mem = 4096;
+      vcpu = 2;
+      configDirName = ".pi";
+      configEnvVar = "PI_CODING_AGENT_DIR";
+      allowedDomains = [
+        "pi.dev"
+        "api.anthropic.com"
+        "api.openai.com"
+        "auth.openai.com"
+        "chatgpt.com"
+        "generativelanguage.googleapis.com"
+        "github.com"
+        "api.github.com"
+        "openrouter.ai"
+        "api.deepseek.com"
+        "api.mistral.ai"
+        "api.x.ai"
+        "api.groq.com"
+        "api.cerebras.ai"
+      ];
+    };
+  };
 }

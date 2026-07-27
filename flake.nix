@@ -32,12 +32,13 @@
             copilot-cli = llm-agents.packages.${system}.copilot-cli;
             opencode = llm-agents.packages.${system}.opencode;
             autolith = autolith.packages.${system}.default;
+            pi-coding-agent = llm-agents.packages.${system}.pi;
           };
-        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli, opencode, autolith }:
+        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli, opencode, autolith, pi-coding-agent }:
           let
             guest = nixpkgs.lib.nixosSystem {
               inherit system;
-              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli opencode autolith; };
+              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli opencode autolith pi-coding-agent; };
               modules = [
                 toolDef.guestModule
                 { nixpkgs.config.allowUnfree = true; }
@@ -74,6 +75,7 @@
           copilot-cli = llm-agents.packages.${system}.copilot-cli;
           opencode = llm-agents.packages.${system}.opencode;
           autolith = autolith.packages.${system}.default;
+          pi-coding-agent = llm-agents.packages.${system}.pi;
         }
       );
     };
