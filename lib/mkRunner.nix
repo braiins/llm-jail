@@ -18,6 +18,7 @@ pkgs.writeShellApplication {
     pkgs.util-linux
     pkgs.nix
     pkgs.e2fsprogs
+    pkgs.pv
     pkgs.socat
   ];
   text = ''
@@ -452,6 +453,20 @@ pkgs.writeShellApplication {
     # Two serials are kept so the kernel `console=ttyS1` resolves: ttyS0=null
     # (unused now that the tool is on hvc0), ttyS1 -> kernel.log. Without
     # ttyS1 present the console falls back to hvc0 and a getty grabs it.
+    #
+    # Console output pump. QEMU's virtconsole frontend silently DROPS guest
+    # output when the host-side chardev write would block (EAGAIN) - console
+    # ports are never throttled, unlike virtserialport ("rather than silently
+    # dropping console data on EAGAIN", QEMU hw/char/virtio-console.c; unfixed
+    # as of QEMU 11.0.1). TUI redraws burst whole frames (100KB+); a
+    # momentarily-full terminal pty (64KB) then loses part of the frame. The
+    # `| pv -q -B 64M` pipeline fixes this: pv drains QEMU's stdout eagerly
+    # into a 64MB buffer and writes to the terminal as it becomes writable,
+    # so the pipe QEMU writes to never stays full and the drop path is never
+    # hit. pv flushes small writes promptly (<=90ms), so interactive echo is
+    # unaffected. The pipeline is foreground: when QEMU exits, the pipe
+    # closes, EOF drains the tail, pv exits, and pipefail propagates QEMU's
+    # status - no FIFO, no background job, no cleanup.
     qemu-system-${arch} \
       "''${KVM_ARGS[@]}" \
       -m "$MEM" \
@@ -474,6 +489,7 @@ pkgs.writeShellApplication {
       -virtfs local,path=/nix/store,security_model=none,mount_tag=nix-store,readonly=on \
       -virtfs "local,path=$RUNDIR,security_model=none,mount_tag=envfs,readonly=on" \
       "''${VIRTFS_ARGS[@]}" \
-      "''${DISK_ARGS[@]}"
+      "''${DISK_ARGS[@]}" \
+      | pv -q -B 64M
   '';
 }
