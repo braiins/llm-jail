@@ -93,7 +93,8 @@ llm-jail-{claude,codex,copilot,opencode,autolith,pi,shell} [options] [-- tool-ar
 | `--tmpdir PATH` | Directory to use for runtime data | `${TMPDIR:-/tmp}` |
 | `--mount PATH` | Extra read-write mount (repeatable) | - |
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | - |
-| `--dev-env` | Capture `nix develop` environment from workspace | off |
+| `--nix-env` | Capture `nix develop` environment from workspace | off |
+| `--devenv` | Capture `devenv.sh` shell environment from workspace | off |
 | `--store-disk SIZE` | Create a disk-backed /nix overlay (SIZE in GB) | off |
 | `--allow-domain DOMAIN` | Add domain to network whitelist (repeatable) | tool defaults |
 | `--no-net-filter` | Disable network filtering (unrestricted access) | filtering on |
@@ -126,7 +127,14 @@ nix run .#claude -- --ro-mount ~/.ssh -- -p "Push the changes"
 Use a nix dev shell inside the VM:
 
 ```bash
-nix run .#claude -- --dev-env -- -p "Run the test suite"
+nix run .#claude -- --nix-env -- -p "Run the test suite"
+```
+
+Use a devenv.sh shell inside the VM (requires `--same-path`, since devenv
+bakes the workspace's absolute host path into its environment):
+
+```bash
+nix run .#claude -- --devenv --same-path -- -p "Run the test suite"
 ```
 
 Allow access to additional domains (e.g. for package installs or git cloning):

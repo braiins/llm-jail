@@ -18,6 +18,7 @@ pkgs.writeShellApplication {
     pkgs.coreutils
     pkgs.util-linux
     pkgs.nix
+    pkgs.devenv
     pkgs.e2fsprogs
     pkgs.pv
     pkgs.socat
@@ -29,7 +30,8 @@ pkgs.writeShellApplication {
     MEM="${toString toolDefaults.mem}"
     VCPU="${toString toolDefaults.vcpu}"
     DANGEROUS=0
-    DEV_ENV=0
+    NIX_ENV=0
+    DEVENV=0
     IMMUTABLE=0
     SAME_PATH=0
     LLMJAIL_TMPDIR=''${TMPDIR:-/tmp}
@@ -72,7 +74,8 @@ pkgs.writeShellApplication {
                             Matched paths appear empty and read-only; the name stays
                             visible, only the contents are hidden.
                             Applied at boot only; new matches post-boot are not masked.
-      --dev-env             Capture nix develop environment from workspace flake
+      --nix-env             Capture nix develop environment from workspace flake
+      --devenv              Capture devenv.sh shell environment from workspace
       --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
       --allow-domain DOMAIN Add domain to network whitelist (repeatable)
       --no-net-filter       Disable network filtering (unrestricted access)
@@ -101,7 +104,11 @@ pkgs.writeShellApplication {
     while [ $# -gt 0 ]; do
       case "$1" in
         --dangerous)   DANGEROUS=1; shift ;;
-        --dev-env)     DEV_ENV=1; shift ;;
+        --nix-env)     NIX_ENV=1; shift ;;
+        --devenv)      DEVENV=1; shift ;;
+        --dev-env|--dev-env=*)
+                       echo "ERROR: --dev-env has been renamed to --nix-env." >&2
+                       exit 1 ;;
         --profile)     PROFILE="$2"; shift 2 ;;
         --state-dir)   STATE_DIR="$2"; shift 2 ;;
         --config-dir|--config-dir=*)
@@ -302,12 +309,72 @@ pkgs.writeShellApplication {
       : > "$RUNDIR/allowed-domains"
     fi
 
-    if [ "$DEV_ENV" = "1" ]; then
+    if [ "$NIX_ENV" = "1" ] && [ "$DEVENV" = "1" ]; then
+      echo "ERROR: --nix-env and --devenv are mutually exclusive" >&2
+      exit 1
+    fi
+
+    if [ "$DEVENV" = "1" ] && [ "$SAME_PATH" != "1" ]; then
+      echo "ERROR: --devenv requires --same-path (devenv bakes the workspace's" >&2
+      echo "absolute host path into DEVENV_ROOT/DEVENV_DOTFILE/DEVENV_STATE," >&2
+      echo "which would otherwise point nowhere once the workspace is mounted" >&2
+      echo "at /workspace in the guest)" >&2
+      exit 1
+    fi
+
+    if [ "$NIX_ENV" = "1" ]; then
       echo "Evaluating nix dev shell..." >&2
       if nix print-dev-env --no-warn-dirty "$(pwd)" > "$RUNDIR/dev-env" 2>/dev/null; then
         echo "Dev shell environment captured." >&2
       else
         echo "WARNING: nix print-dev-env failed, continuing without dev shell" >&2
+        rm -f "$RUNDIR/dev-env"
+      fi
+    elif [ "$DEVENV" = "1" ]; then
+      echo "Evaluating devenv shell..." >&2
+      # `devenv direnv-export` (not `devenv shell`) is the right primitive
+      # here: it's the same command devenv's own maintained direnvrc uses
+      # to import a devenv shell's environment into an already-running
+      # shell (see _nix_import_env in
+      # https://github.com/cachix/devenv/blob/main/devenv/direnvrc), so
+      # unlike `devenv shell` its output ends cleanly after the shellHook
+      # eval with no trailing `exec` to strip - direnv couldn't tolerate
+      # having its own process replaced either. It's undocumented/hidden
+      # from --help but present and stable enough for devenv to depend on
+      # it themselves. _DEVENV_CALLER=direnv matches how direnvrc invokes
+      # it; harmless (at most affects logging) if unnecessary.
+      #
+      # devenv (independent of subcommand - this is its own Rust-side
+      # bootstrap, not something baked into the output text) needs
+      # XDG_RUNTIME_DIR to be a valid, writable directory or it fails
+      # outright ("Failed to create /run/user/<uid>/devenv-<hash>:
+      # Permission denied") before producing any output at all - relevant
+      # on hosts without a real login session providing /run/user/<uid>.
+      # (Unlike `devenv shell`'s rcfile, `direnv-export`'s output only
+      # *exports* DEVENV_RUNTIME as a value - it has no accompanying
+      # `mkdir -p`/`ln -snf` for it, so there's nothing left to fail when
+      # the guest sources this later; this override is purely to let the
+      # capture step below succeed on the host.)
+      #
+      # A dedicated scratch dir is used rather than $RUNDIR: the
+      # workspace's own devenv.nix shellHook runs on the host as part of
+      # `direnv-export` (same trust model as `nix develop`/
+      # `nix print-dev-env` on an untrusted flake), and $RUNDIR holds
+      # allowed-domains/mask-patterns/tool-args/env - files the guest
+      # treats as the trust boundary for its network allowlist and
+      # secrets, staged there before this step runs. A shellHook that
+      # discovers $XDG_RUNTIME_DIR could otherwise read or tamper with
+      # those files pre-boot.
+      DEVENV_RUNTIME_SCRATCH=$(mktemp -d --tmpdir="$LLMJAIL_TMPDIR")
+      cleanup_devenv_runtime_scratch() {
+        rm -rf "$DEVENV_RUNTIME_SCRATCH"
+      }
+      CLEANUP_FUNCS+=(cleanup_devenv_runtime_scratch)
+      if DEVENV_ERR=$(XDG_RUNTIME_DIR="$DEVENV_RUNTIME_SCRATCH" _DEVENV_CALLER=direnv devenv --no-tui -q direnv-export < /dev/null 2>&1 >"$RUNDIR/dev-env"); then
+        echo "Dev shell environment captured." >&2
+      else
+        echo "WARNING: devenv shell failed, continuing without dev shell" >&2
+        echo "$DEVENV_ERR" >&2
         rm -f "$RUNDIR/dev-env"
       fi
     fi
