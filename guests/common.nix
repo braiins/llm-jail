@@ -502,10 +502,22 @@
             export PATH="/host-sw/bin:$PATH"
           fi
 
+          # cd into the workspace before sourcing dev-env: devenv's shellHook
+          # can do its own relative-path checks (e.g. per-language module
+          # checks like `./foo/package.json`) that assume cwd is the project
+          # root, not wherever WorkingDirectory left us (which is a static
+          # "/workspace" that doesn't exist under --same-path).
+          cd "''${WORKSPACE_DIR:-/workspace}"
+
           if [ -f /llmjail-env/dev-env ]; then
-            # dev-env is output of `nix print-dev-env` - a bash script setting PATH, etc.
+            # dev-env is `nix print-dev-env` or `devenv direnv-export`
+            # output - a bash script setting PATH, etc. Neither is written
+            # to tolerate nounset/errexit, so relax strict mode just for
+            # the source.
+            set +euo pipefail
             # shellcheck disable=SC1091
             source /llmjail-env/dev-env
+            set -euo pipefail
           fi
 
           ARGS=()
@@ -527,7 +539,6 @@
             ${pkgs.coreutils}/bin/stty cols "$COLUMNS" rows "$LINES" 2>/dev/null || true
           fi
 
-          cd "''${WORKSPACE_DIR:-/workspace}"
           exec ${config.llmjail.toolBinary} "''${ARGS[@]}"
         '';
       in
