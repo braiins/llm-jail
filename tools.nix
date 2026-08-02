@@ -142,4 +142,28 @@
       ];
     };
   };
+  omp = {
+    guestModule = ./guests/omp.nix;
+    defaults = {
+      mem = 4096;
+      vcpu = 2;
+      configDirName = ".omp";
+      configEnvVar = "PI_CODING_AGENT_DIR";
+      allowedDomains = [
+        "api.anthropic.com"
+        "api.openai.com"
+        "auth.openai.com"
+        "chatgpt.com"
+        "generativelanguage.googleapis.com"
+        "github.com"
+        "api.github.com"
+        "openrouter.ai"
+        "api.deepseek.com"
+        "api.mistral.ai"
+        "api.x.ai"
+        "api.groq.com"
+        "api.cerebras.ai"
+      ];
+    };
+  };
 }
