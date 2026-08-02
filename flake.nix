@@ -7,9 +7,10 @@
     codex-cli-nix.url = "github:sadjow/codex-cli-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
     autolith.url = "github:luciusmagn/autolith";
+    nix-omp.url = "github:jamtur01/nix-omp";
   };
 
-  outputs = { self, nixpkgs, claude-code-nix, codex-cli-nix, llm-agents, autolith, ... }@inputs:
+  outputs = { self, nixpkgs, claude-code-nix, codex-cli-nix, llm-agents, autolith, nix-omp, ... }@inputs:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       tools = import ./tools.nix;
@@ -33,12 +34,34 @@
             opencode = llm-agents.packages.${system}.opencode;
             autolith = autolith.packages.${system}.default;
             pi-coding-agent = llm-agents.packages.${system}.pi;
+            omp = nix-omp.packages.${system}.default;
           };
-        in pkgs.lib.makeOverridable ({ claude-code, codex-cli, copilot-cli, opencode, autolith, pi-coding-agent }:
+        in
+        pkgs.lib.makeOverridable (
+          {
+            claude-code,
+            codex-cli,
+            copilot-cli,
+            opencode,
+            autolith,
+            pi-coding-agent,
+            omp,
+          }:
           let
             guest = nixpkgs.lib.nixosSystem {
               inherit system;
-              specialArgs = { inherit nixpkgs claude-code codex-cli copilot-cli opencode autolith pi-coding-agent; };
+              specialArgs = {
+                inherit
+                  nixpkgs
+                  claude-code
+                  codex-cli
+                  copilot-cli
+                  opencode
+                  autolith
+                  pi-coding-agent
+                  omp
+                  ;
+              };
               modules = [
                 toolDef.guestModule
                 { nixpkgs.config.allowUnfree = true; }
@@ -76,6 +99,7 @@
           opencode = llm-agents.packages.${system}.opencode;
           autolith = autolith.packages.${system}.default;
           pi-coding-agent = llm-agents.packages.${system}.pi;
+          omp = nix-omp.packages.${system}.default;
         }
       );
     };
