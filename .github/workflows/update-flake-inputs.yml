@@ -20,6 +20,7 @@ jobs:
             nix flake update codex-cli-nix
             nix flake update llm-agents
             nix flake update autolith
+            nix flake update nix-omp
           } 2>&1 | tee /tmp/update-output.txt
           {
             echo "UPDATE_OUTPUT<<EOF"
@@ -33,16 +34,17 @@ jobs:
         with:
           token: ${{ secrets.PR_TOKEN }}
           commit-message: |
-            flake: update claude-code-nix, codex-cli-nix, llm-agents.nix, and autolith inputs
+            flake: update claude-code-nix, codex-cli-nix, llm-agents.nix, nix-omp, and autolith inputs
 
             ${{ env.UPDATE_OUTPUT }}
-          title: "flake: update claude-code-nix, codex-cli-nix, llm-agents.nix, and autolith inputs"
+          title: "flake: update claude-code-nix, codex-cli-nix, llm-agents.nix, nix-omp, and autolith inputs"
           body: |
             Automated daily update of flake inputs:
             - `claude-code-nix`
             - `codex-cli-nix`
             - `llm-agents.nix`
             - `autolith`
+            - `nix-omp`
           branch: auto-update-flake-inputs
           delete-branch: true
 

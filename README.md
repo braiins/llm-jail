@@ -12,6 +12,7 @@ Supported tools:
 | [opencode](https://opencode.ai) | `llm-jail-opencode` | `--auto` |
 | [Autolith](https://github.com/luciusmagn/autolith) (x86_64 only) | `llm-jail-autolith` | - |
 | [Pi](https://pi.dev) | `llm-jail-pi` | - |
+| [oh-my-pi](https://omp.sh/) | `llm-jail-omp` | - |
 | Interactive shell (debugging) | `llm-jail-shell` | - |
 
 ## Requirements
@@ -42,6 +43,9 @@ nix run github:braiins/llm-jail#opencode
 
 # Run Pi
 nix run github:braiins/llm-jail#pi
+
+# Run oh-my-pi
+nix run github:braiins/llm-jail#omp
 
 # Authenticate Autolith, then run it (x86_64 Linux only)
 nix run github:braiins/llm-jail#autolith -- -- --auth
@@ -195,6 +199,8 @@ Default allowed domains per tool:
 | opencode | `models.dev`, `registry.npmjs.org`, plus the major hosted providers and their login flows: `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `api.openai.com`, `auth.openai.com`, `generativelanguage.googleapis.com`, `api.githubcopilot.com`, `openrouter.ai`, … (account-specific endpoints like Bedrock/Azure/Vertex need `--allow-domain`) |
 | Autolith | `auth.openai.com`, `chatgpt.com` |
 | Pi | `pi.dev`, `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `github.com`, `api.github.com`, `openrouter.ai`, `api.deepseek.com`, `api.mistral.ai`, `api.x.ai`, `api.groq.com`, `api.cerebras.ai` |
+| oh-my-pi | `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `github.com`, `api.github.com`, `openrouter.ai`, `api.deepseek.com`, `api.mistral.ai`, `api.x.ai`, `api.groq.com`, `api.cerebras.ai` |
+
 
 > [!NOTE]
 > Outbound HTTP/HTTPS is restricted to IPs that the guest's dnsmasq resolved through a whitelisted domain - every successful lookup populates an nftables set (`allowed_ips`), and the firewall only accepts packets whose destination is in that set. Connections to hardcoded IPs that bypass DNS hit the default drop. IPv6 outbound traffic is dropped outright (no IPv6 rules). This is robust against accidental or prompt-injected exfiltration as long as the whitelisted domains themselves aren't bidirectional data channels - see the dangerous-mode warning below.
