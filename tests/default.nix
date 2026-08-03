@@ -81,10 +81,16 @@ let
             machine.succeed("nix --version")
             machine.succeed("nix eval --expr 'true'")
 
-        with subtest("nixpkgs is pinned in registry and NIX_PATH"):
+        with subtest("nixpkgs is pinned in registry and search path"):
             machine.succeed("cat /etc/nix/registry.json | grep nixpkgs")
             machine.succeed("nix-instantiate --eval -E '<nixpkgs>'")
-
+            # The tool service never sources /etc/set-environment (launch-tool
+            # sets __NIXOS_SET_ENVIRONMENT_DONE=1 to keep the host-package PATH
+            # entries), so <nixpkgs> resolution must come from the nix.conf
+            # nix-path setting, not the NIX_PATH session variable.
+            machine.succeed(
+                "env -u NIX_PATH __NIXOS_SET_ENVIRONMENT_DONE=1 nix-instantiate --eval -E '<nixpkgs>'"
+            )
         with subtest("user can read kernel journal"):
             machine.succeed("su - user -c 'journalctl -k --no-pager -n 1'")
       '';
