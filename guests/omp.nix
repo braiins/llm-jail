@@ -21,6 +21,7 @@
 
   environment.systemPackages = [
     omp
+    pkgs.bun
   ];
 }
 
