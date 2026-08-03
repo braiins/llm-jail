@@ -509,9 +509,10 @@
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
     nix.settings.sandbox = false;
 
-    # Pin nixpkgs within the VM
+    # Pin nixpkgs within the VM.
     nix.registry.nixpkgs.flake = nixpkgs;
     nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
+    nix.settings.nix-path = [ "nixpkgs=${pkgs.path}" ];
 
     system.stateVersion = "24.11";
   };
