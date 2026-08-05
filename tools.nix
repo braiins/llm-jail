@@ -74,7 +74,8 @@
     guestModule = ./guests/autolith.nix;
     systems = [ "x86_64-linux" ];
     defaults = {
-      mem = 4096; vcpu = 2;
+      mem = 4096;
+      vcpu = 2;
       configDirName = ".autolith";
       configEnvVar = "AUTOLITH_HOME";
       allowedDomains = [
@@ -139,6 +140,7 @@
         "api.x.ai"
         "api.groq.com"
         "api.cerebras.ai"
+        "api.novita.ai"
       ];
     };
   };
@@ -163,6 +165,7 @@
         "api.x.ai"
         "api.groq.com"
         "api.cerebras.ai"
+        "api.novita.ai"
       ];
     };
   };
