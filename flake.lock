@@ -224,6 +224,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-rolling": {
+      "locked": {
+        "lastModified": 1785828668,
+        "narHash": "sha256-8fsyqeO+mJqvIzeO4xIpgJe/f7MTbbVTEC6RT6WSXNs=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e72e4f299401a3689d4b3d5fc6496b11db7064eb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs_2": {
       "locked": {
         "lastModified": 1785747939,
@@ -311,7 +327,8 @@
         "codex-cli-nix": "codex-cli-nix",
         "llm-agents": "llm-agents",
         "nix-omp": "nix-omp",
-        "nixpkgs": "nixpkgs_6"
+        "nixpkgs": "nixpkgs_6",
+        "nixpkgs-rolling": "nixpkgs-rolling"
       }
     },
     "systems": {

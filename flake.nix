@@ -3,6 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # Nixpkgs that is pinned in NIX_PATH and flake registry in the VM, should be up to date
+    nixpkgs-rolling.url = "github:NixOS/nixpkgs/nixos-unstable";
     claude-code-nix.url = "github:sadjow/claude-code-nix";
     codex-cli-nix.url = "github:sadjow/codex-cli-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
@@ -10,7 +13,7 @@
     nix-omp.url = "github:jamtur01/nix-omp";
   };
 
-  outputs = { self, nixpkgs, claude-code-nix, codex-cli-nix, llm-agents, autolith, nix-omp, ... }@inputs:
+  outputs = { self, nixpkgs, nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents, autolith, nix-omp, ... }@inputs:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       tools = import ./tools.nix;
@@ -53,6 +56,7 @@
               specialArgs = {
                 inherit
                   nixpkgs
+                  nixpkgs-rolling
                   claude-code
                   codex-cli
                   copilot-cli
@@ -88,7 +92,7 @@
 
       checks = forAllSystems (system:
         import ./tests {
-          inherit nixpkgs;
+          inherit nixpkgs nixpkgs-rolling;
           pkgs = import nixpkgs {
             inherit system;
             config.allowUnfree = true;
