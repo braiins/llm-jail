@@ -16,6 +16,7 @@ jobs:
       - name: Update flake inputs
         run: |
           {
+            nix flake update nixpkgs-rolling
             nix flake update claude-code-nix
             nix flake update codex-cli-nix
             nix flake update llm-agents
@@ -34,12 +35,13 @@ jobs:
         with:
           token: ${{ secrets.PR_TOKEN }}
           commit-message: |
-            flake: update claude-code-nix, codex-cli-nix, llm-agents.nix, nix-omp, and autolith inputs
+            flake: update nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents.nix, nix-omp, and autolith inputs
 
             ${{ env.UPDATE_OUTPUT }}
-          title: "flake: update claude-code-nix, codex-cli-nix, llm-agents.nix, nix-omp, and autolith inputs"
+          title: "flake: update nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents.nix, nix-omp, and autolith inputs"
           body: |
             Automated daily update of flake inputs:
+            - `nixpkgs-rolling`
             - `claude-code-nix`
             - `codex-cli-nix`
             - `llm-agents.nix`

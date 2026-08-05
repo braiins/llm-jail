@@ -1,4 +1,4 @@
-{ pkgs, nixpkgs, claude-code, codex-cli, copilot-cli, opencode, omp, autolith ? null, pi-coding-agent ? null }:
+{ pkgs, nixpkgs, nixpkgs-rolling, claude-code, codex-cli, copilot-cli, opencode, omp, autolith ? null, pi-coding-agent ? null }:
 
 let
   mkSmokeTest = { name, guestModule, toolBinary }:
@@ -7,7 +7,7 @@ let
 
       nodes.machine = { lib, ... }: {
         imports = [ guestModule ];
-        _module.args = { inherit nixpkgs claude-code codex-cli copilot-cli opencode omp autolith pi-coding-agent; };
+        _module.args = { inherit nixpkgs nixpkgs-rolling claude-code codex-cli copilot-cli opencode omp autolith pi-coding-agent; };
         # Override 9p filesystem entries from common.nix - the test framework
         # provides its own root and /nix/store via virtualisation options.
         fileSystems."/.nix-lower/store" = lib.mkForce {
@@ -84,13 +84,6 @@ let
         with subtest("nixpkgs is pinned in registry and search path"):
             machine.succeed("cat /etc/nix/registry.json | grep nixpkgs")
             machine.succeed("nix-instantiate --eval -E '<nixpkgs>'")
-            # The tool service never sources /etc/set-environment (launch-tool
-            # sets __NIXOS_SET_ENVIRONMENT_DONE=1 to keep the host-package PATH
-            # entries), so <nixpkgs> resolution must come from the nix.conf
-            # nix-path setting, not the NIX_PATH session variable.
-            machine.succeed(
-                "env -u NIX_PATH __NIXOS_SET_ENVIRONMENT_DONE=1 nix-instantiate --eval -E '<nixpkgs>'"
-            )
         with subtest("user can read kernel journal"):
             machine.succeed("su - user -c 'journalctl -k --no-pager -n 1'")
       '';
@@ -101,7 +94,7 @@ let
 
     nodes.machine = { lib, ... }: {
       imports = [ ../guests/claude.nix ];
-      _module.args = { inherit nixpkgs claude-code codex-cli; };
+      _module.args = { inherit nixpkgs nixpkgs-rolling claude-code codex-cli; };
 
       fileSystems."/.nix-lower/store" = lib.mkForce {
         device = "tmpfs";

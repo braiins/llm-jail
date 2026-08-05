@@ -1,4 +1,4 @@
-{ config, lib, pkgs, nixpkgs, ... }:
+{ config, lib, pkgs, nixpkgs-rolling, ... }:
 
 {
   options.llmjail = {
@@ -540,9 +540,11 @@
     nix.settings.sandbox = false;
 
     # Pin nixpkgs within the VM.
-    nix.registry.nixpkgs.flake = nixpkgs;
-    nix.nixPath = [ "nixpkgs=${pkgs.path}" ];
-    nix.settings.nix-path = [ "nixpkgs=${pkgs.path}" ];
+    nix.registry.nixpkgs.to = {
+      type = "path";
+      path = nixpkgs-rolling;
+    };
+    nix.nixPath = [ "nixpkgs=${nixpkgs-rolling}" ];
 
     system.stateVersion = "24.11";
   };
