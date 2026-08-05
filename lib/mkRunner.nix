@@ -475,7 +475,7 @@ pkgs.writeShellApplication {
       -initrd ${toplevel}/initrd \
       -append "$KERNEL_PARAMS" \
       -display none \
-      -chardev stdio,id=cons0,mux=on \
+      -chardev stdio,id=cons0,mux=on,signal=off \
       -mon chardev=cons0,mode=readline \
       -device virtio-serial-pci \
       -device virtconsole,chardev=cons0,nr=0 \
