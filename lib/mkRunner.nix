@@ -303,6 +303,12 @@ pkgs.writeShellApplication {
       echo "Evaluating nix dev shell..." >&2
       if nix print-dev-env --no-warn-dirty "$(pwd)" > "$RUNDIR/dev-env" 2>/dev/null; then
         echo "Dev shell environment captured." >&2
+        # Override $SHELL with bashInteractive (compiled with readline) so the launcher
+        # runs as a bash session that has completion builtins available. devShell shellHooks
+        # commonly source completion scripts that call complete/compgen/compopt and shopt progcomp;
+        # builtins which are absent in pkgs.bash. This overrides the host $SHELL forwarded earlier
+        # in the env file; systemd EnvironmentFile uses the last value.
+        echo "SHELL=\"${pkgs.bashInteractive}/bin/bash\"" >> "$RUNDIR/env"
       else
         echo "WARNING: nix print-dev-env failed, continuing without dev shell" >&2
         rm -f "$RUNDIR/dev-env"
