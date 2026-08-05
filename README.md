@@ -10,7 +10,7 @@ Supported tools:
 | [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
 | [opencode](https://opencode.ai) | `llm-jail-opencode` | `--auto` |
-| [Autolith](https://github.com/luciusmagn/autolith) (x86_64 only) | `llm-jail-autolith` | - |
+| [Autolith](https://github.com/luciusmagn/autolith) (x86_64 only) | `llm-jail-autolith` | `--permissions full` |
 | [Pi](https://pi.dev) | `llm-jail-pi` | - |
 | [oh-my-pi](https://omp.sh/) | `llm-jail-omp` | - |
 | Interactive shell (debugging) | `llm-jail-shell` | - |
@@ -63,7 +63,7 @@ nix run github:braiins/llm-jail#claude -- -- -p "Refactor the auth module" --max
 
 ## First run & authentication
 
-Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `AUTOLITH_HOME`, `XDG_DATA_HOME` for opencode, or `PI_CODING_AGENT_DIR` for Pi). Your real `~/.claude`, `~/.codex`, `~/.copilot`, `~/.local/share/opencode`, and `~/.pi` are never mounted or read.
+Each tool keeps its state in a jail-private directory on the host - `~/.config/llm-jail/<tool>/<profile>` (profile `default` unless `--profile` is given) - mounted read-write into the guest and selected via the tool's native relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, Autolith's XDG roots plus `CODEX_HOME`/`GROK_HOME`, `XDG_DATA_HOME` for opencode, or `PI_CODING_AGENT_DIR` for Pi). Your real `~/.claude`, `~/.codex`, `~/.copilot`, `~/.local/share/opencode`, and `~/.pi` are never mounted or read.
 
 On first run the directory is empty, so the tool walks you through its normal login flow in the terminal (the OAuth paste-a-URL flow works as-is). Credentials, settings, and session history then persist across runs. Copilot on headless Linux will ask to store its token in plaintext inside the config dir - that's expected, there is no keychain in the guest. opencode doesn't prompt by itself - log in once with `nix run .#opencode -- -- auth login`. Authenticate Autolith explicitly with `nix run .#autolith -- -- --auth`; its first launch also builds pinned recovery and active Lisp images offline in the private state directory. Pi has no explicit login command - launch it once with `nix run .#pi` and use its built-in `/login` flow; credentials persist in the jail-private state directory.
 
@@ -170,7 +170,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 **Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
 
 - The current working directory -> `/workspace` (read-write)
-- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, `.pi`, or `.shell` (read-write; the tool is pointed at it via `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`COPILOT_HOME`/`XDG_DATA_HOME`/`AUTOLITH_HOME`/`PI_CODING_AGENT_DIR`/`ZDOTDIR`)
+- The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, `.pi`, or `.shell` (read-write; Autolith uses its XDG roots plus `CODEX_HOME`/`GROK_HOME`; the other tools use `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `PI_CODING_AGENT_DIR`, or `ZDOTDIR`)
 - `~/.gitconfig` is copied in (9p cannot mount single files)
 - Host system and user packages -> `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
