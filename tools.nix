@@ -76,7 +76,7 @@
     defaults = {
       mem = 4096;
       vcpu = 2;
-      configDirName = ".autolith";
+      configDirName = ".config/autolith";
       configEnvVar = "AUTOLITH_HOME";
       allowedDomains = [
         "auth.openai.com"
