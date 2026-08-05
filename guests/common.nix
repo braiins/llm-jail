@@ -427,6 +427,42 @@
       '';
     };
 
+    # mostly copied from similar service in nixpkgs/nixos/modules/virtualisation/qemu-vm.nix
+    systemd.services.register-nix-paths = {
+      unitConfig.DefaultDependencies = false;
+      wantedBy = [ "sysinit.target" ];
+
+      before = [
+        "sysinit.target"
+        "shutdown.target"
+        "nix-daemon.socket"
+        "nix-daemon.service"
+      ];
+      after = [
+        "local-fs.target"
+      ];
+      conflicts = [
+        "shutdown.target"
+      ];
+      restartIfChanged = false;
+      script = ''
+        NIX_DB_DUMP=""
+        for arg in $(cat /proc/cmdline); do
+          case "$arg" in
+            llmjail.nix_db_dump=*) NIX_DB_DUMP="''${arg#llmjail.nix_db_dump=}" ;;
+          esac
+        done
+
+        if [[ -z "$NIX_DB_DUMP" ]]; then
+          echo "<4> No Nix db dump specified (llmjail.nix_db_dump), not loading Nix db"
+          exit 1
+        fi
+
+        ${lib.getExe' config.nix.package "nix-store"} --load-db < "$NIX_DB_DUMP"
+      '';
+    };
+
+
     systemd.services.llmjail-tool =
       let
         launcher = pkgs.writeShellScript "launch-tool" ''
