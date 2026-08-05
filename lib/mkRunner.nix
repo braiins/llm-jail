@@ -7,6 +7,7 @@
 
 let
   toplevel = guest.config.system.build.toplevel;
+  toplevelDbDump = pkgs.closureInfo { rootPaths = [ toplevel ]; };
   qemuPkg = pkgs.qemu_kvm;
   arch = if pkgs.stdenv.hostPlatform.isx86_64 then "x86_64" else "aarch64";
 in
@@ -417,6 +418,8 @@ pkgs.writeShellApplication {
     if USER_UID=''${EUID:-$(id -u)} && [[ -n "$USER_UID" ]]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.user_uid=$USER_UID"
     fi
+
+    KERNEL_PARAMS="$KERNEL_PARAMS llmjail.nix_db_dump=${toplevelDbDump}/registration"
 
     DISK_ARGS=()
     if [ "$STORE_DISK" -gt 0 ]; then
