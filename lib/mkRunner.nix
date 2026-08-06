@@ -21,6 +21,7 @@ pkgs.writeShellApplication {
     pkgs.e2fsprogs
     pkgs.pv
     pkgs.socat
+    pkgs.sqlite
   ];
   text = ''
     set -euo pipefail
@@ -356,6 +357,19 @@ pkgs.writeShellApplication {
       cp "$HOME/.gitconfig" "$RUNDIR/.gitconfig"
     fi
 
+    # Snapshot the host nix db into the envfs share so the guest can register the whole host store
+    # without replaying rows through `nix-store --load-db` (minutes for big stores). `.backup` is
+    # safe against the live nix-daemon and includes uncheckpointed WAL state. Skipped when the host
+    # has no local nix db (the guest then falls back to the toplevel closure dump).
+    NIX_DB_SNAPSHOT=""
+    if [ -f /nix/var/nix/db/db.sqlite ]; then
+      if sqlite3 /nix/var/nix/db/db.sqlite ".backup $RUNDIR/nix-db.sqlite" 2>/dev/null; then
+        NIX_DB_SNAPSHOT="/llmjail-env/nix-db.sqlite"
+      else
+        echo "WARNING: could not snapshot host nix db, falling back to closure dump" >&2
+      fi
+    fi
+
     # Mount host packages if available (NixOS host)
     if [ -d /run/current-system/sw ]; then
       add_mount "/run/current-system/sw" "/host-sw" "ro"
@@ -417,6 +431,10 @@ pkgs.writeShellApplication {
 
     if USER_UID=''${EUID:-$(id -u)} && [[ -n "$USER_UID" ]]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.user_uid=$USER_UID"
+    fi
+
+    if [ -n "$NIX_DB_SNAPSHOT" ]; then
+      KERNEL_PARAMS="$KERNEL_PARAMS llmjail.nix_db_snapshot=$NIX_DB_SNAPSHOT"
     fi
 
     KERNEL_PARAMS="$KERNEL_PARAMS llmjail.nix_db_dump=${toplevelDbDump}/registration"
