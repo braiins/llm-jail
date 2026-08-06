@@ -112,10 +112,16 @@
     # /nix/store overlay and /nix/var bind-mount are done by the
     # llmjail-store-overlay initrd service (above) which orders itself
     # after the 9p lower layer is mounted.
+    # /llmjail-env: small config files plus the host nix db snapshot.
+    # cache=loose (same as the store lower mount below): the share is
+    # read-only and its files are immutable during the run, and loose
+    # enables client readahead. cache=none serializes every 9p read
+    # request-by-request, which made installing the multi-MB db snapshot
+    # take seconds.
     fileSystems."/llmjail-env" = {
       device = "envfs";
       fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=none" "msize=1048576" "ro" ];
+      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
       neededForBoot = true;
     };
 
@@ -427,7 +433,14 @@
       '';
     };
 
-    # mostly copied from similar service in nixpkgs/nixos/modules/virtualisation/qemu-vm.nix
+    # Register the host store's paths in the guest nix db before the
+    # nix-daemon starts. Preferred source is a snapshot of the host's
+    # /nix/var/nix/db/db.sqlite (llmjail.nix_db_snapshot, taken by the
+    # runner via `sqlite3 .backup` and shipped through the envfs share):
+    # installing the file takes milliseconds, vs minutes for --load-db of
+    # a big store. Falls back to the toplevel closure registration dump
+    # (llmjail.nix_db_dump) when no snapshot is available. Mostly copied
+    # from nixpkgs/nixos/modules/virtualisation/qemu-vm.nix.
     systemd.services.register-nix-paths = {
       unitConfig.DefaultDependencies = false;
       wantedBy = [ "sysinit.target" ];
@@ -446,19 +459,29 @@
       ];
       restartIfChanged = false;
       script = ''
+        NIX_DB_SNAPSHOT=""
         NIX_DB_DUMP=""
         for arg in $(cat /proc/cmdline); do
           case "$arg" in
+            llmjail.nix_db_snapshot=*) NIX_DB_SNAPSHOT="''${arg#llmjail.nix_db_snapshot=}" ;;
             llmjail.nix_db_dump=*) NIX_DB_DUMP="''${arg#llmjail.nix_db_dump=}" ;;
           esac
         done
 
-        if [[ -z "$NIX_DB_DUMP" ]]; then
-          echo "<4> No Nix db dump specified (llmjail.nix_db_dump), not loading Nix db"
+        if [[ -n "$NIX_DB_SNAPSHOT" ]] && [[ -s "$NIX_DB_SNAPSHOT" ]]; then
+          echo "Installing host nix db snapshot ($NIX_DB_SNAPSHOT)"
+          ${pkgs.coreutils}/bin/mkdir -p /nix/var/nix/db
+          # Drop leftover WAL state from a previous boot on a persistent
+          # store disk; the snapshot is a clean standalone db.
+          ${pkgs.coreutils}/bin/rm -f /nix/var/nix/db/db.sqlite-wal /nix/var/nix/db/db.sqlite-shm
+          ${pkgs.coreutils}/bin/install -m 0644 "$NIX_DB_SNAPSHOT" /nix/var/nix/db/db.sqlite
+        elif [[ -n "$NIX_DB_DUMP" ]]; then
+          echo "Loading closure nix db dump ($NIX_DB_DUMP)"
+          ${lib.getExe' config.nix.package "nix-store"} --load-db < "$NIX_DB_DUMP"
+        else
+          echo "<4> No Nix db snapshot or dump specified, not initializing Nix db"
           exit 1
         fi
-
-        ${lib.getExe' config.nix.package "nix-store"} --load-db < "$NIX_DB_DUMP"
       '';
     };
 
