@@ -24,7 +24,9 @@
           (_: def: builtins.elem system (def.systems or supportedSystems))
           tools;
 
-      flags = { };
+      flags = {
+        devenv = true;
+      };
       apply = package: setFlags: package.override { flags = setFlags; };
       addFlags = import ./lib/addFlags.nix;
 
