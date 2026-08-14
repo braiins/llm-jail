@@ -1,8 +1,9 @@
-{ pkgs
-, name
-, guest
-, toolDefaults
-,
+{
+  pkgs,
+  name,
+  guest,
+  toolDefaults,
+  flags,
 }:
 
 let
