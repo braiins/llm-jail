@@ -496,10 +496,10 @@
           set -euo pipefail
           # Add host packages to PATH if available (NixOS host)
           if [ -d /host-user-sw/bin ]; then
-            export PATH="/host-user-sw/bin:$PATH"
+            export PATH="$PATH:/host-user-sw/bin"
           fi
           if [ -d /host-sw/bin ]; then
-            export PATH="/host-sw/bin:$PATH"
+            export PATH="$PATH:/host-sw/bin"
           fi
 
           # cd into the workspace before sourcing dev-env: devenv's shellHook
