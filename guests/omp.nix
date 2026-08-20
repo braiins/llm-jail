@@ -22,6 +22,7 @@
   environment.systemPackages = [
     omp
     pkgs.bun
+    pkgs.python3
   ];
 }
 
