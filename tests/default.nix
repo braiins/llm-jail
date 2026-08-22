@@ -150,6 +150,90 @@ let
     '';
   };
 
+  shellDevEnvTest =
+    let
+      # The shell tool's launcher (llmjail.toolBinary) is what execs the
+      # interactive shell; grab it from the guest module.
+      shellLauncher = (import ../guests/shell.nix { inherit pkgs; }).llmjail.toolBinary;
+    in
+    pkgs.testers.nixosTest {
+      name = "llmjail-shell-dev-env";
+
+      nodes.machine = { lib, ... }: {
+        imports = [ ../guests/shell.nix ];
+        _module.args = { inherit nixpkgs nixpkgs-rolling claude-code codex-cli copilot-cli opencode omp autolith pi-coding-agent; };
+        # Same overrides as mkSmokeTest: the test framework provides its
+        # own root and /nix/store.
+        fileSystems."/.nix-lower/store" = lib.mkForce {
+          device = "tmpfs";
+          fsType = "tmpfs";
+          options = [ "size=1M" ];
+        };
+        fileSystems."/llmjail-env" = lib.mkForce {
+          device = "tmpfs";
+          fsType = "tmpfs";
+          options = [ "size=10M" ];
+        };
+        boot.initrd.postMountCommands = lib.mkForce "";
+
+        systemd.tmpfiles.rules = [
+          "d /workspace 0755 user users -"
+          "f /llmjail-env/env 0644 root root - HOME=/home/user"
+          "f /llmjail-env/tool-args 0644 root root -"
+          "f /llmjail-env/allowed-domains 0644 root root -"
+        ];
+
+        systemd.services.llmjail-tool = {
+          wantedBy = lib.mkForce [ ];
+          serviceConfig.ExecStopPost = lib.mkForce "";
+        };
+
+        virtualisation.memorySize = 1024;
+      };
+
+      testScript = ''
+        machine.start()
+        machine.wait_for_unit("multi-user.target")
+
+        # Simulate --nix-env: a captured dev shell environment whose
+        # shellHook sets PS1 (with bash `\[`/`\]` escapes), defines an
+        # alias, and echoes a marker. Real dev-env files are
+        # `nix print-dev-env` output ending in `eval "${shellHook:-}"`;
+        # sourcing the hook body directly is equivalent for this test.
+        # r"""...""" (not '''): the testScript type-checker parses this as
+        # Python, and the raw string keeps `\u`/`\h` from being seen as
+        # escapes; Nix indented strings only escape single quotes.
+        machine.succeed(
+            r"""cat > /llmjail-env/dev-env <<'HOOKEOF'
+        export PS1='[\[\]\u@\h:\w]$ '
+        alias ll='ls -la'
+        echo SHELLHOOK_RAN
+        HOOKEOF"""
+        )
+
+        with subtest("shellHook runs in the interactive shell"):
+            # Drive the shell launcher under script(1) so the guest shell
+            # is interactive; feed it a command that uses the hook's alias.
+            machine.succeed(
+                "printf 'll\\nexit\\n' | SHELL=$(command -v bash) script -qec ${shellLauncher} /tmp/session.log >/dev/null 2>&1"
+            )
+            out = machine.succeed("cat /tmp/session.log")
+            assert "SHELLHOOK_RAN" in out, f"shellHook did not run in the interactive shell: {out}"
+            assert "total " in out, f"hook alias 'll' did not expand to ls -la: {out}"
+            assert "\\[\\]" not in out, f"PS1 escapes were rendered literally: {out}"
+
+        with subtest("dev-env forces bash even when host SHELL is zsh"):
+            # dev-env is a bash script, so the launcher must launch bash
+            # regardless of a non-bash $SHELL.
+            machine.succeed(
+                "printf 'echo BASHV=$BASH_VERSION\\nexit\\n' | SHELL=$(command -v zsh) script -qec ${shellLauncher} /tmp/session2.log >/dev/null 2>&1"
+            )
+            out = machine.succeed("cat /tmp/session2.log")
+            assert "BASHV=5" in out, f"expected bash to be launched for dev-env, got: {out}"
+            assert "SHELLHOOK_RAN" in out, f"shellHook did not run under forced bash: {out}"
+      '';
+    };
+
 in
 {
   claude-smoke = mkSmokeTest {
@@ -189,6 +273,8 @@ in
   };
 
   net-filter-smoke = netFilterTest;
+
+  shell-dev-env = shellDevEnvTest;
 }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
   autolith-smoke = mkSmokeTest {
