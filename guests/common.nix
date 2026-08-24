@@ -436,7 +436,7 @@
     # Register the host store's paths in the guest nix db before the
     # nix-daemon starts. Preferred source is a snapshot of the host's
     # /nix/var/nix/db/db.sqlite (llmjail.nix_db_snapshot, taken by the
-    # runner via `sqlite3 .backup` and shipped through the envfs share):
+    # runner via `sqlite3 VACUUM INTO` and shipped through the envfs share):
     # installing the file takes milliseconds, vs minutes for --load-db of
     # a big store. Falls back to the toplevel closure registration dump
     # (llmjail.nix_db_dump) when no snapshot is available. Mostly copied
