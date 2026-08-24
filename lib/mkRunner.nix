@@ -425,14 +425,21 @@ pkgs.writeShellApplication {
     fi
 
     # Snapshot the host nix db into the envfs share so the guest can register the whole host store
-    # without replaying rows through `nix-store --load-db` (minutes for big stores). `.backup` is
-    # safe against the live nix-daemon and includes uncheckpointed WAL state. Skipped when the host
-    # has no local nix db (the guest then falls back to the toplevel closure dump).
+    # without replaying rows through `nix-store --load-db` (minutes for big stores). Uses `VACUUM
+    # INTO` instead of `.backup`: the backup API opens the WAL source read-only and must take the
+    # WAL write lock as a proxy for the read-marks it cannot place in the daemon-owned, non-writable
+    # -wal/-shm files; the fcntl write lock then fails with EBADF on the read-only fd and sqlite
+    # retries forever (reported as a hang requiring ctrl+c). `VACUUM INTO` reads the source with a
+    # plain read transaction, works against the live root-owned nix db, and the output is compact
+    # (free pages are dropped). Bounded by `timeout` as a backstop; on failure falls back to the
+    # toplevel closure dump.
     NIX_DB_SNAPSHOT=""
     if [ -f /nix/var/nix/db/db.sqlite ]; then
-      if sqlite3 /nix/var/nix/db/db.sqlite ".backup $RUNDIR/nix-db.sqlite" 2>/dev/null; then
+      rm -f "$RUNDIR/nix-db.sqlite"   # VACUUM INTO refuses an existing output file
+      if timeout 60 sqlite3 /nix/var/nix/db/db.sqlite "VACUUM INTO '$RUNDIR/nix-db.sqlite';" 2>/dev/null; then
         NIX_DB_SNAPSHOT="/llmjail-env/nix-db.sqlite"
       else
+        rm -f "$RUNDIR/nix-db.sqlite" # VACUUM INTO may leave a partial file on failure
         echo "WARNING: could not snapshot host nix db, falling back to closure dump" >&2
       fi
     fi
