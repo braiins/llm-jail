@@ -130,6 +130,12 @@ Use a nix dev shell inside the VM:
 nix run .#claude -- --nix-env -- -p "Run the test suite"
 ```
 
+The dev shell's `shellHook` is evaluated inside the VM. The captured
+environment is a bash script, so with `--nix-env` the `shell` tool always
+launches bash; for that tool the hook runs in the interactive shell, so
+aliases, functions, and PS1 changes from the hook apply to the shell you
+see.
+
 Use a devenv.sh shell inside the VM (requires `--same-path`, since devenv
 bakes the workspace's absolute host path into its environment):
 
