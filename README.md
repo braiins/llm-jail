@@ -1,6 +1,6 @@
 # llm-jail
 
-Hardware-level sandbox for running coding agents inside QEMU microVMs. No containers, no disk images - each session boots a minimal NixOS guest on tmpfs with the host Nix store shared read-only.
+Hardware-level sandbox for running coding agents inside Linux microVMs. No containers or root disk images are needed. Each session boots a minimal NixOS guest on tmpfs with the host Nix store shared read-only.
 
 Supported tools:
 
@@ -10,18 +10,25 @@ Supported tools:
 | [Codex CLI](https://github.com/openai/codex) | `llm-jail-codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | `llm-jail-copilot` | `--yolo` |
 | [opencode](https://opencode.ai) | `llm-jail-opencode` | `--auto` |
-| [Autolith](https://github.com/luciusmagn/autolith) (x86_64 only) | `llm-jail-autolith` | `--permissions full` |
+| [Autolith](https://github.com/luciusmagn/autolith) | `llm-jail-autolith` | `--permissions full` |
 | [Pi](https://pi.dev) | `llm-jail-pi` | - |
 | [oh-my-pi](https://omp.sh/) | `llm-jail-omp` | - |
 | Interactive shell (debugging) | `llm-jail-shell` | - |
 
 ## Requirements
 
-- Linux (x86_64 or aarch64)
+- Linux (x86_64 or aarch64), or Apple Silicon macOS
 - [Nix](https://nixos.org/) with flakes enabled
-- KVM access recommended (falls back to emulation without it)
+- KVM access recommended on Linux (falls back to emulation without it)
+- Virtualization.framework on macOS 13 or newer
+- A Linux builder or binary cache that can supply the `aarch64-linux` guest closure on macOS
 
 No host-side tool credentials are needed: you log in once inside the jail on first run, and the tool's state persists in a jail-private directory under `~/.config/llm-jail/` (see [First run & authentication](#first-run--authentication)).
+
+Apple Silicon currently exposes the `claude`, `autolith`, and `shell` runners.
+The flake keeps its declared inputs intact. Darwin builds the ordinary
+`aarch64-linux` guest through the configured builder or substitutes it from a
+cache, then runs it locally through Virtualization.framework.
 
 ## Quick start
 
@@ -47,7 +54,7 @@ nix run github:braiins/llm-jail#pi
 # Run oh-my-pi
 nix run github:braiins/llm-jail#omp
 
-# Authenticate Autolith, then run it (x86_64 Linux only)
+# Authenticate Autolith, then run it
 nix run github:braiins/llm-jail#autolith -- -- --auth
 nix run github:braiins/llm-jail#autolith
 
@@ -90,6 +97,7 @@ llm-jail-{claude,codex,copilot,opencode,autolith,pi,shell} [options] [-- tool-ar
 | `--profile NAME` | State profile, a subdir of `--state-dir/<tool>` | `default` |
 | `--state-dir PATH` | Jail state root dir, mounted read-write | `~/.config/llm-jail` |
 | `--immutable` | Mount workspace as read-only | off |
+| `--supervisor-socket PATH` | Connect a guest serial device to an existing host Unix socket | - |
 | `--tmpdir PATH` | Directory to use for runtime data | `${TMPDIR:-/tmp}` |
 | `--mount PATH` | Extra read-write mount (repeatable) | - |
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | - |
@@ -102,7 +110,7 @@ llm-jail-{claude,codex,copilot,opencode,autolith,pi,shell} [options] [-- tool-ar
 | `--vcpu COUNT` | Number of vCPUs | 2 |
 | `-h`, `--help` | Show help | - |
 
-Press **Ctrl-a x** to force-quit QEMU at any time.
+Press **Ctrl-c** to stop the VM on macOS. Press **Ctrl-a x** to force-quit QEMU on Linux.
 
 ### Examples
 
@@ -149,6 +157,22 @@ Disable network filtering entirely:
 nix run .#claude -- --no-net-filter
 ```
 
+### Supervisor socket
+
+`--supervisor-socket /absolute/path` connects a private guest serial device to
+an existing host `AF_UNIX` stream listener. The listener must create and listen
+on the socket before llm-jail starts. Inside the guest,
+`LLMJAIL_SUPERVISOR_DEVICE` names the device: the QEMU backend uses
+`/dev/virtio-ports/llmjail.supervisor` and the VZ backend uses `/dev/hvc1`.
+
+This is a policy-free byte transport. llm-jail does not define message framing,
+register operations, authenticate requests, launch handlers, or inspect the
+traffic. The listener owns the complete protocol and must treat every byte from
+the guest as hostile. It must validate and authorize requests, bound resource
+use, keep credentials out of responses, and close the socket when the session
+ends. The host socket path is not published in the guest. Without this option,
+no supervisor serial device is attached and the environment variable is unset.
+
 Run `nix build` inside the VM with extra storage (root tmpfs is only 2G):
 
 ```bash
@@ -163,7 +187,7 @@ nix run .#shell -- --allow-domain github.com # opt in to specific domains
 nix run .#shell -- --no-net-filter           # full network for debugging
 ```
 
-The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` path is used) and falls back to zsh or bash if the host shell isn't reachable inside the guest (e.g. on non-NixOS hosts). Shell rc files are not copied in; bring anything you need with `--ro-mount`.
+On Linux, the shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` path is used) and falls back to zsh or bash if the host shell isn't reachable inside the guest. On macOS it uses the guest's Nix-built zsh or bash because Darwin binaries cannot execute in the Linux guest. Shell rc files are not copied in; bring anything you need with `--ro-mount`.
 
 ## What's isolated
 
@@ -171,7 +195,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 
 - The current working directory -> `/workspace` (read-write)
 - The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, `.pi`, or `.shell` (read-write; Autolith uses its XDG roots plus `CODEX_HOME`/`GROK_HOME`; the other tools use `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `PI_CODING_AGENT_DIR`, or `ZDOTDIR`)
-- `~/.gitconfig` is copied in (9p cannot mount single files)
+- `~/.gitconfig` is copied into the read-only environment share
 - Host system and user packages -> `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
 
@@ -179,7 +203,7 @@ All other host paths are invisible to the guest. Changes outside mounted directo
 
 On NixOS hosts, system packages (`/run/current-system/sw`) and user packages (`/etc/profiles/per-user/$USER`) are automatically mounted and added to PATH, so tools like `jj`, `ripgrep`, etc. are available without hardcoding them in the guest.
 
-**Processes.** The agent runs inside a full QEMU virtual machine - separate kernel, separate PID namespace. There is no shared process space with the host.
+**Processes.** The agent runs inside a Linux virtual machine with a separate kernel and process space. Linux uses QEMU/KVM and macOS uses Virtualization.framework.
 
 **Environment variables.** Only these are forwarded to the guest:
 
@@ -237,18 +261,18 @@ Default allowed domains per tool:
 |  writeShellApplication (mkRunner.nix)          |
 |    - parses CLI args                           |
 |    - writes env vars + tool args to tmpdir     |
-|    - sets up 9p virtfs mounts                  |
+|    - defines explicit host directory shares   |
 |    - optionally creates store disk image       |
-|    - launches qemu-system-*                    |
+|    - launches QEMU/KVM or VZ                   |
 +------------------+-----------------------------+
-                   | QEMU (direct kernel boot)
+                   | direct kernel boot
 +-- Guest (NixOS) -+-----------------------------+
-|  /nix/store <- overlay (9p lower + disk/tmpfs) |
+|  /nix/store <- overlay (shared lower + backing)|
 |  /nix/var   <- bind from disk/tmpfs backing    |
-|  /workspace <- 9p read-write                   |
+|  /workspace <- explicit read-write share       |
 |                                                |
 |  systemd                                       |
-|    -> llmjail-mounts: mount 9p shares          |
+|    -> llmjail-mounts: mount host shares        |
 |    -> llmjail-net-filter: dnsmasq + nftables   |
 |    -> llmjail-tool: exec the tool binary       |
 |                                                |
@@ -256,7 +280,18 @@ Default allowed domains per tool:
 +------------------------------------------------+
 ```
 
-No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
+The guest kernel and initrd are built by NixOS and booted directly. Linux uses
+QEMU with KVM and 9p shares. Apple Silicon uses a small ad-hoc signed
+Virtualization.framework launcher and VirtioFS shares. Read-only shares are
+marked read-only by the host VZ configuration, not merely by the guest mount.
+`/nix/store` is the lower layer of an overlay whose writable backing is tmpfs or
+an explicit sparse ext4 `--store-disk`. The disk is removed when the VM exits.
+
+The trust boundary is narrow. The guest, agent, mutable workspace, and any
+supervisor traffic are untrusted. The host runner, VM process, and any optional
+supervisor listener are trusted. The guest can use only the directories and
+host interfaces selected at launch. This is authority containment, not a claim
+that an agent cannot do dangerous work inside its mounted workspace.
 
 ## Overriding tool packages
 

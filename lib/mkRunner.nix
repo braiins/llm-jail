@@ -1,6 +1,7 @@
 { pkgs
 , name
 , guest
+, guestSystem
 , toolDefaults
 ,
 }:
@@ -8,22 +9,22 @@
 let
   toplevel = guest.config.system.build.toplevel;
   toplevelDbDump = pkgs.closureInfo { rootPaths = [ toplevel ]; };
-  qemuPkg = pkgs.qemu_kvm;
-  arch = if pkgs.stdenv.hostPlatform.isx86_64 then "x86_64" else "aarch64";
+  hostIsDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+  guestIsAarch64 = guestSystem == "aarch64-linux";
+  arch = if guestIsAarch64 then "aarch64" else "x86_64";
+  vzRunner = if hostIsDarwin then import ./vz-runner { inherit pkgs; } else null;
 in
 pkgs.writeShellApplication {
   name = "llm-jail-${name}";
   runtimeInputs = [
-    qemuPkg
     pkgs.coreutils
-    pkgs.util-linux
     pkgs.nix
     pkgs.devenv
     pkgs.e2fsprogs
-    pkgs.pv
     pkgs.socat
     pkgs.sqlite
-  ];
+  ] ++ pkgs.lib.optional hostIsDarwin vzRunner
+    ++ pkgs.lib.optionals (!hostIsDarwin) [ pkgs.qemu_kvm pkgs.pv ];
   text = ''
     set -euo pipefail
 
@@ -40,6 +41,7 @@ pkgs.writeShellApplication {
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
     MASK_PATTERNS=()
+    SUPERVISOR_SOCKET=""
     TOOL_ARGS=()
 
     PROFILE="''${LLMJAIL_PROFILE:-default}"
@@ -74,6 +76,9 @@ pkgs.writeShellApplication {
                             Matched paths appear empty and read-only; the name stays
                             visible, only the contents are hidden.
                             Applied at boot only; new matches post-boot are not masked.
+      --supervisor-socket ABSOLUTE_PATH
+                            Connect a private guest serial device to an
+                            existing host Unix socket listener
       --nix-env             Capture nix develop environment from workspace flake
       --devenv              Capture devenv.sh shell environment from workspace
       --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
@@ -83,7 +88,7 @@ pkgs.writeShellApplication {
       --vcpu COUNT          vCPUs (default: ${toString toolDefaults.vcpu})
       -h, --help            Show this help
 
-    Press Ctrl-a x to force-quit QEMU.
+    ${if hostIsDarwin then "Press Ctrl-c to stop the VM." else "Press Ctrl-a x to force-quit QEMU."}
     USAGE
       exit 0
     }
@@ -122,6 +127,8 @@ pkgs.writeShellApplication {
         --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
         --no-net-filter) NET_FILTER=0; shift ;;
         --mask)        MASK_PATTERNS+=("$2"); shift 2 ;;
+        --supervisor-socket)
+                       SUPERVISOR_SOCKET="$2"; shift 2 ;;
         --store-disk)  STORE_DISK="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
         --vcpu)        VCPU="$2"; shift 2 ;;
@@ -137,7 +144,8 @@ pkgs.writeShellApplication {
     if [ -z "$STATE_DIR" ]; then
       STATE_DIR="''${XDG_CONFIG_HOME:-$HOME/.config}/llm-jail"
     fi
-    STATE_DIR="$STATE_DIR/${name}/$PROFILE"
+    STATE_ROOT="$STATE_DIR"
+    STATE_DIR="$STATE_ROOT/${name}/$PROFILE"
 
     if [ ! -d "$LLMJAIL_TMPDIR" ]; then
       echo "ERROR: tmpdir '$LLMJAIL_TMPDIR' does not exist" >&2
@@ -163,12 +171,38 @@ pkgs.writeShellApplication {
     }
 
     validate_path "$LLMJAIL_TMPDIR" "tmpdir"
+    if [ -n "$SUPERVISOR_SOCKET" ]; then
+      if [[ "$SUPERVISOR_SOCKET" != /* ]]; then
+        echo "ERROR: supervisor socket path must be absolute: $SUPERVISOR_SOCKET" >&2
+        exit 1
+      fi
+      if [[ "$SUPERVISOR_SOCKET" == *,* ]]; then
+        echo "ERROR: supervisor socket path must not contain commas: $SUPERVISOR_SOCKET" >&2
+        exit 1
+      fi
+      if [ ! -S "$SUPERVISOR_SOCKET" ]; then
+        echo "ERROR: supervisor socket is not an existing Unix socket: $SUPERVISOR_SOCKET" >&2
+        exit 1
+      fi
+    fi
     RUNDIR=$(mktemp -d --tmpdir="$LLMJAIL_TMPDIR")
 
     cleanup_rundir() {
       [ -d "$RUNDIR" ] && rm -rf "$RUNDIR"
     }
     CLEANUP_FUNCS+=(cleanup_rundir)
+
+    SUPERVISOR_VM_ARGS=()
+    if [ -n "$SUPERVISOR_SOCKET" ]; then
+      ${if hostIsDarwin then ''
+        SUPERVISOR_VM_ARGS=(--supervisor-socket "$SUPERVISOR_SOCKET")
+      '' else ''
+        SUPERVISOR_VM_ARGS=(
+          -chardev "socket,id=supervisor,path=$SUPERVISOR_SOCKET,server=off"
+          -device "virtserialport,chardev=supervisor,name=llmjail.supervisor"
+        )
+      ''}
+    fi
 
     # TODO: QEMU has a pending patch series (v6, "console: add
     # TIOCSWINSZ support") that adds native SIGWINCH->virtconsole
@@ -185,7 +219,9 @@ pkgs.writeShellApplication {
     # exits, so a dedicated subshell owns the SIGWINCH trap and parks in
     # `sleep & wait` - wait's trap-interrupt semantics fire the trap
     # promptly on each resize.
-    WINSIZE_SOCK="$RUNDIR/winsize.sock"
+    ${pkgs.lib.optionalString (!hostIsDarwin) ''
+      WINSIZE_SOCK="$RUNDIR/winsize.sock"
+    ''}
     WINSIZE_FIFO="$RUNDIR/winsize.fifo"
     mkfifo "$WINSIZE_FIFO"
     # Hold the FIFO open RDWR on fd 3 so trap writes never block on
@@ -242,15 +278,17 @@ pkgs.writeShellApplication {
         fi
       done
 
-      # Forward host shell (resolved through symlinks so the /nix/store path
-      # is exposed, which the guest can reach via the 9p store mount even
-      # though /run/current-system/sw is remapped to /host-sw).
-      if [ -n "''${SHELL:-}" ]; then
-        RESOLVED_SHELL=$(readlink -f "$SHELL" 2>/dev/null || true)
-        if [ -n "$RESOLVED_SHELL" ]; then
-          echo "SHELL=\"$RESOLVED_SHELL\""
+      ${pkgs.lib.optionalString (!hostIsDarwin) ''
+        # Forward a Linux host shell resolved into /nix/store. Darwin shell
+        # binaries cannot execute in the Linux guest, which already includes
+        # explicit bash and zsh packages.
+        if [ -n "''${SHELL:-}" ]; then
+          RESOLVED_SHELL=$(readlink -f "$SHELL" 2>/dev/null || true)
+          if [ -n "$RESOLVED_SHELL" ]; then
+            echo "SHELL=\"$RESOLVED_SHELL\""
+          fi
         fi
-      fi
+      ''}
 
       env | grep '^AWS_' || true
 
@@ -270,6 +308,9 @@ pkgs.writeShellApplication {
 
       echo "HOME=/home/user"
       echo "LLMJAIL_DANGEROUS=$DANGEROUS"
+      if [ -n "$SUPERVISOR_SOCKET" ]; then
+        echo "LLMJAIL_SUPERVISOR_DEVICE=${if hostIsDarwin then "/dev/hvc1" else "/dev/virtio-ports/llmjail.supervisor"}"
+      fi
       # Relocate the tool's state into the jail-private state mount
       echo "${toolDefaults.configEnvVar}=/home/user/${toolDefaults.configDirName}"
       echo "WORKSPACE_DIR=\"$WORKSPACE_DIR\""
@@ -304,10 +345,26 @@ pkgs.writeShellApplication {
         for d in "''${EXTRA_DOMAINS[@]+"''${EXTRA_DOMAINS[@]}"}"; do
           echo "$d"
         done
+      } | sort -u > "$RUNDIR/runtime-allowed-domains"
+
+      {
+        cat "$RUNDIR/runtime-allowed-domains"
+        ${builtins.concatStringsSep "\n    " (
+          map (d: "echo \"${d}\"") (toolDefaults.buildAllowedDomains or [ ])
+        )}
       } | sort -u > "$RUNDIR/allowed-domains"
     else
       : > "$RUNDIR/allowed-domains"
+      : > "$RUNDIR/runtime-allowed-domains"
     fi
+
+    ${pkgs.lib.optionalString hostIsDarwin ''
+      HOST_DNS=$(/usr/sbin/scutil --dns \
+        | ${pkgs.gawk}/bin/awk -f ${./select-darwin-dns.awk})
+      if [ -n "$HOST_DNS" ]; then
+        printf '%s\n' "$HOST_DNS" > "$RUNDIR/host-dns"
+      fi
+    ''}
 
     if [ "$NIX_ENV" = "1" ] && [ "$DEVENV" = "1" ]; then
       echo "ERROR: --nix-env and --devenv are mutually exclusive" >&2
@@ -381,7 +438,7 @@ pkgs.writeShellApplication {
 
     MOUNT_IDX=0
     MOUNT_CMDLINE=""
-    VIRTFS_ARGS=()
+    SHARE_ARGS=()
     MASK_ROOTS=()
 
     add_mount() {
@@ -389,11 +446,19 @@ pkgs.writeShellApplication {
       local tag="mount''${MOUNT_IDX}"
       MOUNT_IDX=$((MOUNT_IDX + 1))
 
-      local virtfs="local,path=$hostpath,security_model=none,mount_tag=$tag"
-      if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
-        virtfs="$virtfs,readonly=on"
-      fi
-      VIRTFS_ARGS+=("-virtfs" "$virtfs")
+      ${if hostIsDarwin then ''
+        local share_mode="rw"
+        if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
+          share_mode="ro"
+        fi
+        SHARE_ARGS+=("--share" "$tag:$hostpath:$share_mode")
+      '' else ''
+        local virtfs="local,path=$hostpath,security_model=none,mount_tag=$tag"
+        if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
+          virtfs="$virtfs,readonly=on"
+        fi
+        SHARE_ARGS+=("-virtfs" "$virtfs")
+      ''}
 
       if [ -n "$MOUNT_CMDLINE" ]; then
         MOUNT_CMDLINE="$MOUNT_CMDLINE,$tag:$guestpath:$mode"
@@ -414,12 +479,12 @@ pkgs.writeShellApplication {
     MASK_ROOTS+=("$WORKSPACE_DIR")
 
     validate_path "$STATE_DIR" "state directory"
-    # 9p refuses to share a non-existent path; first run starts empty and
+    # Host directory shares require an existing path; first run starts empty and
     # the tool goes through its login/onboarding flow inside the jail.
     mkdir -p "$STATE_DIR"
     add_mount "$STATE_DIR" "/home/user/${toolDefaults.configDirName}" "rw"
 
-    # Copy .gitconfig into the envfs share (9p can't mount single files)
+    # Copy .gitconfig into the environment share because shares are directories.
     if [ -f "$HOME/.gitconfig" ]; then
       cp "$HOME/.gitconfig" "$RUNDIR/.gitconfig"
     fi
@@ -444,17 +509,19 @@ pkgs.writeShellApplication {
       fi
     fi
 
-    # Mount host packages if available (NixOS host)
-    if [ -d /run/current-system/sw ]; then
-      add_mount "/run/current-system/sw" "/host-sw" "ro"
-    fi
+    ${pkgs.lib.optionalString (!hostIsDarwin) ''
+      # Mount host packages if available (NixOS host).
+      if [ -d /run/current-system/sw ]; then
+        add_mount "/run/current-system/sw" "/host-sw" "ro"
+      fi
 
-    # whoami from nixpkgs coreutils won't work on non-NixOS systems that have the user come from
-    # sssd and don't have nscd/nsncd enabled
-    USERNAME=$(whoami 2>/dev/null) || USERNAME="$USER"
-    if [ -n "$USERNAME" ] && [ -d "/etc/profiles/per-user/$USERNAME" ]; then
-      add_mount "/etc/profiles/per-user/$USERNAME" "/host-user-sw" "ro"
-    fi
+      # whoami from nixpkgs coreutils won't work on non-NixOS systems that
+      # have the user come from sssd and don't have nscd/nsncd enabled.
+      USERNAME=$(whoami 2>/dev/null) || USERNAME="$USER"
+      if [ -n "$USERNAME" ] && [ -d "/etc/profiles/per-user/$USERNAME" ]; then
+        add_mount "/etc/profiles/per-user/$USERNAME" "/host-user-sw" "ro"
+      fi
+    ''}
 
     for spec in "''${EXTRA_MOUNTS[@]+"''${EXTRA_MOUNTS[@]}"}"; do
       if [ -z "$spec" ]; then continue; fi
@@ -493,7 +560,7 @@ pkgs.writeShellApplication {
       : > "$RUNDIR/mask-roots"
     fi
 
-    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"
+    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init llmjail.mounts=$MOUNT_CMDLINE"
 
     if [ "$STORE_DISK" -gt 0 ]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.store_disk=1"
@@ -512,30 +579,77 @@ pkgs.writeShellApplication {
     fi
 
     KERNEL_PARAMS="$KERNEL_PARAMS llmjail.nix_db_dump=${toplevelDbDump}/registration"
+    ${pkgs.lib.optionalString hostIsDarwin ''
+      WINSIZE_DEVICE=/dev/hvc1
+      if [ -n "$SUPERVISOR_SOCKET" ]; then
+        WINSIZE_DEVICE=/dev/hvc2
+      fi
+      KERNEL_PARAMS="$KERNEL_PARAMS llmjail.winsize_device=$WINSIZE_DEVICE"
+    ''}
 
     DISK_ARGS=()
     if [ "$STORE_DISK" -gt 0 ]; then
-      truncate -s "''${STORE_DISK}G" "$RUNDIR/store.img"
-      mkfs.ext4 -q "$RUNDIR/store.img"
-      DISK_ARGS+=("-drive" "file=$RUNDIR/store.img,format=raw,if=virtio,discard=on")
+      STORE_IMAGE="$RUNDIR/store.img"
+      truncate -s "''${STORE_DISK}G" "$STORE_IMAGE"
+      mkfs.ext4 -q "$STORE_IMAGE"
+      ${if hostIsDarwin then ''
+        DISK_ARGS+=(--disk "$STORE_IMAGE")
+      '' else ''
+        DISK_ARGS+=("-drive" "file=$STORE_IMAGE,format=raw,if=virtio,discard=on")
+      ''}
     fi
 
-    KVM_ARGS=()
-    if [ -w /dev/kvm ]; then
-      KVM_ARGS+=("-enable-kvm" "-cpu" "host")
-    else
-      echo "WARNING: /dev/kvm not available, falling back to emulation (slow)" >&2
-      KVM_ARGS+=("-cpu" "max")
-    fi
+    ${if hostIsDarwin then ''
+      # VirtioFS cannot expose metadata for host Nix lock sidecars that the
+      # host daemon owns with mode 0600. Select the exact sidecar shape after
+      # all host-side Nix work so the guest can hide those foreign lock names
+      # in its overlay.
+      ${pkgs.findutils}/bin/find /nix/store \
+        -maxdepth 1 \
+        -type f \
+        -name '*.lock' \
+        -size 0c \
+        -perm 0600 \
+        -printf '%f\0' \
+        > "$RUNDIR/store-lock-sidecars"
 
-    # socat itself retries the UNIX-CONNECT until QEMU binds the socket,
-    # so no polling loop is needed.
-    socat -u "PIPE:$WINSIZE_FIFO" "UNIX-CONNECT:$WINSIZE_SOCK,retry=100,interval=0.1" 2>/dev/null &
-    SOCAT_PID=$!
-    cleanup_socat() {
-      kill "$SOCAT_PID" 2>/dev/null
-    }
-    CLEANUP_FUNCS+=(cleanup_socat)
+      printf '%s\n' "$KERNEL_PARAMS" > "$RUNDIR/kernel-params"
+      llm-jail-vz \
+        --cpus "$VCPU" \
+        --memory "$MEM" \
+        --kernel ${toplevel}/kernel \
+        --initrd ${toplevel}/initrd \
+        --cmdline-file "$RUNDIR/kernel-params" \
+        --share "nix-store:/nix/store:ro" \
+        --share "envfs:$RUNDIR:ro" \
+        --winsize-input "$WINSIZE_FIFO" \
+        "''${SUPERVISOR_VM_ARGS[@]}" \
+        "''${SHARE_ARGS[@]}" \
+        "''${DISK_ARGS[@]}"
+    '' else ''
+      ACCEL_ARGS=()
+      if [ -w /dev/kvm ]; then
+        ACCEL_ARGS+=("-accel" "kvm" "-cpu" "host")
+      else
+        echo "WARNING: /dev/kvm not available, falling back to emulation (slow)" >&2
+        ACCEL_ARGS+=("-accel" "tcg" "-cpu" "max")
+      fi
+
+      MACHINE_ARGS=()
+      SERIAL_ARGS=()
+      ${if guestIsAarch64 then ''
+        MACHINE_ARGS+=("-machine" "virt")
+        SERIAL_ARGS+=("-serial" "file:$RUNDIR/kernel.log")
+      '' else ''
+        SERIAL_ARGS+=("-serial" "null" "-serial" "file:$RUNDIR/kernel.log")
+      ''}
+
+      socat -u "PIPE:$WINSIZE_FIFO" "UNIX-CONNECT:$WINSIZE_SOCK,retry=100,interval=0.1" 2>/dev/null &
+      SOCAT_PID=$!
+      cleanup_socat() {
+        kill "$SOCAT_PID" 2>/dev/null
+      }
+      CLEANUP_FUNCS+=(cleanup_socat)
 
     # hvc0 (virtio-console) instead of ttyS0 (16550A): the UART transfers
     # output byte-at-a-time through port IO + per-byte interrupts, which
@@ -545,9 +659,9 @@ pkgs.writeShellApplication {
     #
     # -display none (not -nographic): we wire stdio explicitly via the mux
     # chardev; -nographic assumes a single serial-on-stdio and conflicts.
-    # Two serials are kept so the kernel `console=ttyS1` resolves: ttyS0=null
-    # (unused now that the tool is on hvc0), ttyS1 -> kernel.log. Without
-    # ttyS1 present the console falls back to hvc0 and a getty grabs it.
+    # On x86, two serials are kept so `console=ttyS1` resolves: ttyS0=null and
+    # ttyS1 -> kernel.log. ARM's virt machine instead routes its one PL011
+    # `ttyAMA0` console to kernel.log.
     #
     # Console output pump. QEMU's virtconsole frontend silently DROPS guest
     # output when the host-side chardev write would block (EAGAIN) - console
@@ -562,8 +676,9 @@ pkgs.writeShellApplication {
     # unaffected. The pipeline is foreground: when QEMU exits, the pipe
     # closes, EOF drains the tail, pv exits, and pipefail propagates QEMU's
     # status - no FIFO, no background job, no cleanup.
-    qemu-system-${arch} \
-      "''${KVM_ARGS[@]}" \
+      qemu-system-${arch} \
+      "''${ACCEL_ARGS[@]}" \
+      "''${MACHINE_ARGS[@]}" \
       -m "$MEM" \
       -smp "$VCPU" \
       -kernel ${toplevel}/kernel \
@@ -576,15 +691,16 @@ pkgs.writeShellApplication {
       -device virtconsole,chardev=cons0,nr=0 \
       -chardev "socket,id=winsize,path=$WINSIZE_SOCK,server=on,wait=off" \
       -device virtserialport,chardev=winsize,name=llmjail.winsize \
-      -serial null \
-      -serial file:"$RUNDIR/kernel.log" \
+      "''${SUPERVISOR_VM_ARGS[@]}" \
+      "''${SERIAL_ARGS[@]}" \
       -no-reboot \
       -device virtio-rng-pci \
       -nic user,model=virtio-net-pci \
       -virtfs local,path=/nix/store,security_model=none,mount_tag=nix-store,readonly=on \
       -virtfs "local,path=$RUNDIR,security_model=none,mount_tag=envfs,readonly=on" \
-      "''${VIRTFS_ARGS[@]}" \
+      "''${SHARE_ARGS[@]}" \
       "''${DISK_ARGS[@]}" \
       | pv -q -B 64M
+    ''}
   '';
 }
