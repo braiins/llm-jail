@@ -24,6 +24,12 @@
           (_: def: builtins.elem system (def.systems or supportedSystems))
           tools;
 
+      flags = {
+        devenv = true;
+      };
+      apply = package: setFlags: package.override { flags = setFlags; };
+      addFlags = import ./lib/addFlags.nix;
+
       mkTool = system: toolName: toolDef:
         let
           pkgs = nixpkgs.legacyPackages.${system};
@@ -39,8 +45,7 @@
             pi-coding-agent = llm-agents.packages.${system}.pi;
             omp = nix-omp.packages.${system}.default;
           };
-        in
-        pkgs.lib.makeOverridable (
+          tool = pkgs.lib.makeOverridable (
           {
             claude-code,
             codex-cli,
@@ -49,6 +54,7 @@
             autolith,
             pi-coding-agent,
             omp,
+            flags ? { },
           }:
           let
             guest = nixpkgs.lib.nixosSystem {
@@ -72,11 +78,13 @@
               ];
             };
           in import ./lib/mkRunner.nix {
-            inherit pkgs guest;
+            inherit pkgs guest flags;
             name = toolName;
             toolDefaults = toolDef.defaults;
           }
         ) defaultArgs;
+        in
+          addFlags tool flags apply;
 
     in {
       packages = forAllSystems (system:
