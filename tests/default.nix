@@ -7,7 +7,10 @@ let
 
       nodes.machine = { lib, ... }: {
         imports = [ guestModule ];
-        _module.args = { inherit nixpkgs nixpkgs-rolling claude-code codex-cli copilot-cli opencode omp autolith pi-coding-agent; };
+        _module.args = {
+          hostBackend = "qemu";
+          inherit nixpkgs nixpkgs-rolling claude-code codex-cli copilot-cli opencode omp autolith pi-coding-agent;
+        };
         # Override 9p filesystem entries from common.nix - the test framework
         # provides its own root and /nix/store via virtualisation options.
         fileSystems."/.nix-lower/store" = lib.mkForce {
@@ -21,6 +24,7 @@ let
           options = [ "size=10M" ];
         };
         boot.initrd.postMountCommands = lib.mkForce "";
+        boot.kernelParams = lib.mkAfter [ "llmjail.user_uid=501" ];
 
         # Provide mock envfs contents for the mounts service
         systemd.tmpfiles.rules = [
@@ -72,10 +76,18 @@ let
             machine.succeed("which curl")
             machine.succeed("which ssh")
 
+        with subtest("no supervisor protocol client is installed"):
+            machine.fail("command -v llm-jail-supervisor")
+
         with subtest("user account is configured"):
             machine.succeed("id user")
+            machine.succeed("test $(id -u user) -eq 501")
             machine.succeed("test -d /home/user")
             machine.succeed("getent passwd user | grep -q /home/user")
+
+        with subtest("supervisor device permissions are narrow"):
+            machine.succeed("id -nG user | grep -qw dialout")
+            machine.succeed("grep -q 'llmjail.supervisor.*GROUP:=\"dialout\".*MODE:=\"0660\"' /etc/udev/rules.d/99-local.rules")
 
         with subtest("nix has flakes enabled"):
             machine.succeed("nix --version")
@@ -94,7 +106,10 @@ let
 
     nodes.machine = { lib, ... }: {
       imports = [ ../guests/claude.nix ];
-      _module.args = { inherit nixpkgs nixpkgs-rolling claude-code codex-cli; };
+      _module.args = {
+        hostBackend = "qemu";
+        inherit nixpkgs nixpkgs-rolling claude-code codex-cli;
+      };
 
       fileSystems."/.nix-lower/store" = lib.mkForce {
         device = "tmpfs";
@@ -190,7 +205,7 @@ in
 
   net-filter-smoke = netFilterTest;
 }
-// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
+// pkgs.lib.optionalAttrs (autolith != null) {
   autolith-smoke = mkSmokeTest {
     name = "autolith";
     guestModule = ../guests/autolith.nix;

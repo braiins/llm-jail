@@ -1,0 +1,19 @@
+DNS configuration
+
+resolver #1
+  nameserver[0] : 100.100.100.100
+  flags    : Supplemental, Request A records
+  reach    : 0x00000003 (Reachable,Transient Connection)
+
+resolver #2
+  nameserver[0] : 2001:db8::53
+  nameserver[1] : 2001:db8::54
+  flags    : Request AAAA records
+  reach    : 0x00000002 (Reachable)
+
+DNS configuration (for scoped queries)
+
+resolver #1
+  nameserver[0] : 192.0.2.1
+  flags    : Scoped, Request A records
+  reach    : 0x00000002 (Reachable)

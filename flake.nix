@@ -1,5 +1,5 @@
 {
-  description = "llm-jail - QEMU MicroVM sandbox for coding agents";
+  description = "llm-jail - microVM sandbox for coding agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -15,29 +15,40 @@
 
   outputs = { self, nixpkgs, nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents, autolith, nix-omp, ... }@inputs:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       tools = import ./tools.nix;
 
       forAllSystems = f: nixpkgs.lib.genAttrs supportedSystems f;
-      toolsForSystem = system:
-        nixpkgs.lib.filterAttrs
-          (_: def: builtins.elem system (def.systems or supportedSystems))
-          tools;
-
-      mkTool = system: toolName: toolDef:
+      guestSystemFor = hostSystem:
+        if hostSystem == "aarch64-darwin" then "aarch64-linux" else hostSystem;
+      autolithPackageFor = system:
+        nixpkgs.lib.attrByPath [ "packages" system "default" ] null autolith;
+      toolsForSystem = hostSystem:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          guestSystem = guestSystemFor hostSystem;
+        in
+          nixpkgs.lib.filterAttrs
+            (name: def:
+              builtins.elem guestSystem (def.systems or supportedSystems)
+              && (name != "autolith" || autolithPackageFor guestSystem != null)
+              && (hostSystem != "aarch64-darwin" || builtins.elem name [ "claude" "autolith" "shell" ]))
+            tools;
+
+      mkTool = hostSystem: toolName: toolDef:
+        let
+          guestSystem = guestSystemFor hostSystem;
+          pkgs = nixpkgs.legacyPackages.${hostSystem};
           # Default tool packages - overridable via `.override { claude-code = ...; }`
           # on the resulting runner derivation. Consumers can swap any of these
           # without forking the flake.
           defaultArgs = {
-            claude-code = claude-code-nix.packages.${system}.default;
-            codex-cli = codex-cli-nix.packages.${system}.default;
-            copilot-cli = llm-agents.packages.${system}.copilot-cli;
-            opencode = llm-agents.packages.${system}.opencode;
-            autolith = autolith.packages.${system}.default;
-            pi-coding-agent = llm-agents.packages.${system}.pi;
-            omp = nix-omp.packages.${system}.default;
+            claude-code = claude-code-nix.packages.${guestSystem}.default;
+            codex-cli = codex-cli-nix.packages.${guestSystem}.default;
+            copilot-cli = llm-agents.packages.${guestSystem}.copilot-cli;
+            opencode = llm-agents.packages.${guestSystem}.opencode;
+            autolith = autolithPackageFor guestSystem;
+            pi-coding-agent = llm-agents.packages.${guestSystem}.pi;
+            omp = nix-omp.packages.${guestSystem}.default;
           };
         in
         pkgs.lib.makeOverridable (
@@ -52,8 +63,9 @@
           }:
           let
             guest = nixpkgs.lib.nixosSystem {
-              inherit system;
+              system = guestSystem;
               specialArgs = {
+                hostBackend = if pkgs.stdenv.hostPlatform.isDarwin then "vz" else "qemu";
                 inherit
                   nixpkgs
                   nixpkgs-rolling
@@ -72,7 +84,7 @@
               ];
             };
           in import ./lib/mkRunner.nix {
-            inherit pkgs guest;
+            inherit pkgs guest guestSystem;
             name = toolName;
             toolDefaults = toolDef.defaults;
           }
@@ -91,20 +103,47 @@
       );
 
       checks = forAllSystems (system:
-        import ./tests {
-          inherit nixpkgs nixpkgs-rolling;
+        let
           pkgs = import nixpkgs {
             inherit system;
             config.allowUnfree = true;
           };
-          claude-code = claude-code-nix.packages.${system}.default;
-          codex-cli = codex-cli-nix.packages.${system}.default;
-          copilot-cli = llm-agents.packages.${system}.copilot-cli;
-          opencode = llm-agents.packages.${system}.opencode;
-          autolith = autolith.packages.${system}.default;
-          pi-coding-agent = llm-agents.packages.${system}.pi;
-          omp = nix-omp.packages.${system}.default;
-        }
+          darwinDnsSelectorCheck = pkgs.runCommand "llmjail-darwin-dns-selector" { } ''
+            selected=$(${pkgs.gawk}/bin/awk \
+              -f ${./lib/select-darwin-dns.awk} \
+              ${./tests/fixtures/scutil-dns-tailscale.txt})
+            test "$selected" = "192.0.2.53"
+
+            selected=$(${pkgs.gawk}/bin/awk \
+              -f ${./lib/select-darwin-dns.awk} \
+              ${./tests/fixtures/scutil-dns-no-ordinary-ipv4.txt})
+            test -z "$selected"
+
+            touch "$out"
+          '';
+        in {
+          darwin-dns-selector = darwinDnsSelectorCheck;
+        } // (
+          if pkgs.stdenv.hostPlatform.isDarwin then
+            {
+              claude-runner = self.packages.${system}.claude;
+              shell-runner = self.packages.${system}.shell;
+            }
+            // nixpkgs.lib.optionalAttrs (autolithPackageFor (guestSystemFor system) != null) {
+              autolith-runner = self.packages.${system}.autolith;
+            }
+          else
+            import ./tests {
+              inherit nixpkgs nixpkgs-rolling pkgs;
+              claude-code = claude-code-nix.packages.${system}.default;
+              codex-cli = codex-cli-nix.packages.${system}.default;
+              copilot-cli = llm-agents.packages.${system}.copilot-cli;
+              opencode = llm-agents.packages.${system}.opencode;
+              autolith = autolithPackageFor system;
+              pi-coding-agent = llm-agents.packages.${system}.pi;
+              omp = nix-omp.packages.${system}.default;
+            }
+        )
       );
     };
 }
