@@ -104,6 +104,26 @@ llm-jail-{claude,codex,copilot,opencode,autolith,pi,shell} [options] [-- tool-ar
 
 Press **Ctrl-a x** to force-quit QEMU at any time.
 
+### Nix build-time 'arguments'
+Some features may need to be added at build-time for the VM itself, and can thus not be enabled with
+simple script --flags. For such features we have a way to easily pass 'arguments' to the tool before
+it builds itself. This is done by specifying a nested attribute that corresponds to a defined
+argument in the tool you want to use. The arguments can be specified in any order. For example:
+```bash
+# Runs the base claude tool with no build-time arguments
+nix run .#claude
+
+# Runs the claude tool with argument `devenv`, which then gets used to modify the build
+nix run .#claude.devenv
+
+# Run with arguments `foo` and `devenv`
+nix run .#claude.foo.devenv
+```
+
+| Argument | Description |
+|----------|-------------|
+| `devenv` | Adds `devenv` to the runner script's PATH |
+
 ### Examples
 
 Run Claude in dangerous mode for a fully autonomous task:
@@ -134,7 +154,7 @@ Use a devenv.sh shell inside the VM (requires `--same-path`, since devenv
 bakes the workspace's absolute host path into its environment):
 
 ```bash
-nix run .#claude -- --devenv --same-path -- -p "Run the test suite"
+nix run .#claude.devenv -- --devenv --same-path -- -p "Run the test suite"
 ```
 
 Allow access to additional domains (e.g. for package installs or git cloning):

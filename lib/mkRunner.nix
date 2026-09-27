@@ -1,11 +1,13 @@
-{ pkgs
-, name
-, guest
-, toolDefaults
-,
+{
+  pkgs,
+  name,
+  guest,
+  toolDefaults,
+  flags,
 }:
 
 let
+  inherit (pkgs) lib;
   toplevel = guest.config.system.build.toplevel;
   toplevelDbDump = pkgs.closureInfo { rootPaths = [ toplevel ]; };
   qemuPkg = pkgs.qemu_kvm;
@@ -18,12 +20,12 @@ pkgs.writeShellApplication {
     pkgs.coreutils
     pkgs.util-linux
     pkgs.nix
-    pkgs.devenv
     pkgs.e2fsprogs
     pkgs.pv
     pkgs.socat
     pkgs.sqlite
-  ];
+  ]
+  ++ (lib.optional (flags ? devenv) pkgs.devenv);
   text = ''
     set -euo pipefail
 
@@ -284,9 +286,7 @@ pkgs.writeShellApplication {
 
     if [ "$NET_FILTER" = "1" ]; then
       {
-        ${builtins.concatStringsSep "\n    " (
-          map (d: "echo \"${d}\"") toolDefaults.allowedDomains
-        )}
+        ${builtins.concatStringsSep "\n    " (map (d: "echo \"${d}\"") toolDefaults.allowedDomains)}
 
         # Auto-extract domains from base URL env vars
         for var in ANTHROPIC_BASE_URL OPENAI_BASE_URL; do
@@ -307,6 +307,13 @@ pkgs.writeShellApplication {
       } | sort -u > "$RUNDIR/allowed-domains"
     else
       : > "$RUNDIR/allowed-domains"
+    fi
+
+    if [ "$DEVENV" = "1" ] && ! command -v devenv >/dev/null; then
+      echo "ERROR: --devenv requires the 'devenv' CLI, which was not found" >&2
+      echo "You can add it to the tool by using, for example," >&2
+      echo "'packages.x86_64-linux.claude.devenv' instead of 'packages.x86_64-linux.claude'"
+      exit 1
     fi
 
     if [ "$NIX_ENV" = "1" ] && [ "$DEVENV" = "1" ]; then
