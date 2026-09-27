@@ -1,5 +1,13 @@
-{ config, lib, pkgs, nixpkgs-rolling, ... }:
+{ config, lib, pkgs, hostBackend, nixpkgs-rolling, ... }:
 
+let
+  useVz = hostBackend == "vz";
+  shareFileSystem = if useVz then "virtiofs" else "9p";
+  shareOptions =
+    if useVz
+    then [ "ro" ]
+    else [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
+in
 {
   options.llmjail = {
     toolBinary = lib.mkOption {
@@ -17,15 +25,18 @@
     # Switch to systemd-initrd (default in 26.11). Required because we use
     # boot.initrd.systemd.services below to set up the /nix/store overlay.
     boot.initrd.systemd.enable = true;
-    boot.kernelParams = [ "console=ttyS1" ];
+    boot.kernelParams = [
+      (if useVz then "console=hvc0"
+       else if pkgs.stdenv.hostPlatform.isAarch64 then "console=ttyAMA0"
+       else "console=ttyS1")
+    ];
     boot.initrd.availableKernelModules = [
-      "9p"
-      "9pnet_virtio"
       "virtio_pci"
       "virtio_blk"
       "virtio_net"
       "virtio_rng"
-    ];
+    ] ++ lib.optionals useVz [ "virtiofs" ]
+      ++ lib.optionals (!useVz) [ "9p" "9pnet_virtio" ];
     # Force-load overlay in initrd: availableKernelModules only allows
     # autoload, but the systemd-initrd path doesn't always trigger it for
     # `mount -t overlay`, so make it explicit.
@@ -83,9 +94,44 @@
           /sysroot/.nix-backing/store-work \
           /sysroot/.nix-backing/var
 
+        ${lib.optionalString useVz ''
+          # The host selected only regular, zero-byte, mode-0600 Nix lock
+          # sidecars. Create OverlayFS whiteouts directly in the private upper
+          # layer because VirtioFS denies guest metadata access to the lower
+          # files themselves.
+          if [ -s /sysroot/llmjail-env/store-lock-sidecars ]; then
+            while IFS= read -r -d "" lock; do
+              case "$lock" in
+                */*|""|.|..)
+                  echo "Invalid host-store lock basename: $lock" >&2
+                  exit 1
+                  ;;
+                *.lock)
+                  ${pkgs.coreutils}/bin/mknod \
+                    "/sysroot/.nix-backing/store-upper/$lock" c 0 0
+                  ;;
+                *)
+                  echo "Invalid host-store lock basename: $lock" >&2
+                  exit 1
+                  ;;
+              esac
+            done < /sysroot/llmjail-env/store-lock-sidecars
+          fi
+        ''}
+
         mkdir -p /sysroot/nix/store
         mount -t overlay overlay /sysroot/nix/store \
           -o "lowerdir=/sysroot/.nix-lower/store,upperdir=/sysroot/.nix-backing/store-upper,workdir=/sysroot/.nix-backing/store-work"
+
+        ${lib.optionalString (!useVz) ''
+          # QEMU's 9p mapping lets the guest inspect the host lock metadata,
+          # so select and whiteout the exact sidecar shape through the overlay.
+          find /sysroot/.nix-lower/store \
+            -maxdepth 1 -type f -name '*.lock' -size 0 -perm 0600 -print |
+            while IFS= read -r lock; do
+              rm -f "/sysroot/nix/store/''${lock##*/}"
+            done
+        ''}
 
         mkdir -p /sysroot/nix/var
         mount --bind /sysroot/.nix-backing/var /sysroot/nix/var
@@ -104,8 +150,8 @@
     # crippling metadata-heavy tool I/O on large workspaces.
     fileSystems."/.nix-lower/store" = {
       device = "nix-store";
-      fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
+      fsType = shareFileSystem;
+      options = shareOptions;
       neededForBoot = true;
     };
 
@@ -120,13 +166,13 @@
     # take seconds.
     fileSystems."/llmjail-env" = {
       device = "envfs";
-      fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
+      fsType = shareFileSystem;
+      options = shareOptions;
       neededForBoot = true;
     };
 
     networking.useDHCP = false;
-    networking.nameservers = [ "10.0.2.3" ];
+    networking.nameservers = lib.optionals (!useVz) [ "10.0.2.3" ];
     networking.firewall.enable = false;
 
     # nixos-26.05 + systemd-networkd auto-enables resolved, which inserts
@@ -147,6 +193,34 @@
       wait-online.enable = true;
     };
 
+    systemd.services.llmjail-vz-resolver = lib.mkIf useVz {
+      description = "Install the VZ NAT resolver from DHCP";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      before = [ "llmjail-net-filter.service" "llmjail-tool.service" ];
+      serviceConfig.Type = "oneshot";
+      script = ''
+        set -eu
+        DNS_SERVER=""
+        if [ -s /llmjail-env/host-dns ]; then
+          IFS= read -r DNS_SERVER < /llmjail-env/host-dns
+        else
+          for lease in /run/systemd/netif/leases/*; do
+            [ -f "$lease" ] || continue
+            DNS_SERVER=$(${pkgs.gnused}/bin/sed -n 's/^DNS=//p' "$lease" \
+              | ${pkgs.gawk}/bin/awk '{ print $1; exit }')
+            [ -n "$DNS_SERVER" ] && break
+          done
+        fi
+        if [ -z "$DNS_SERVER" ]; then
+          echo "Could not determine the VZ NAT DNS server." >&2
+          exit 1
+        fi
+        echo "nameserver $DNS_SERVER" > /etc/resolv.conf
+      '';
+    };
+
     users.users.user = {
       isNormalUser = true;
       uid = 1000;
@@ -154,6 +228,11 @@
       shell = pkgs.bash;
       extraGroups = [ "tty" "dialout" "systemd-journal" ];
     };
+
+    services.udev.extraRules = ''
+      KERNEL=="vport*", SUBSYSTEM=="virtio-ports", ATTR{name}=="llmjail.supervisor", OWNER:="root", GROUP:="dialout", MODE:="0660"
+      ${lib.optionalString useVz ''KERNEL=="hvc1", OWNER:="root", GROUP:="dialout", MODE:="0660"''}
+    '';
 
     users.mutableUsers = true;
     systemd.services.llmjail-set-user-uid = {
@@ -166,7 +245,9 @@
             llmjail.user_uid=*) USER_UID="''${arg#llmjail.user_uid=}" ;;
           esac
         done
-        if [[ -n "$USER_UID" && "$USER_UID" -ge 1000 ]] && ! ${pkgs.getent}/bin/getent passwd "$USER_UID"; then
+        # Darwin login UIDs commonly start at 501. Avoid only the system UID
+        # range below 500, and retain the collision check before changing it.
+        if [[ -n "$USER_UID" && "$USER_UID" -ge 500 ]] && ! ${pkgs.getent}/bin/getent passwd "$USER_UID"; then
           ${pkgs.shadow}/bin/usermod -u "$USER_UID" user
         fi
       '';
@@ -176,9 +257,9 @@
     };
 
     # Parses kernel cmdline for llmjail.mounts=tag0:/path:rw,tag1:/path:ro,...
-    # and mounts each entry via 9p.
+    # and mounts each entry through the selected host sharing backend.
     systemd.services.llmjail-mounts = {
-      description = "Mount llmjail 9p shares from kernel cmdline";
+      description = "Mount llmjail host shares from kernel cmdline";
       wantedBy = [ "multi-user.target" ];
       before = [ "llmjail-tool.service" ];
       after = [ "local-fs.target" ];
@@ -208,13 +289,25 @@
           echo "Mounting $tag -> $mpath ($mode)"
           ${pkgs.coreutils}/bin/mkdir -p "$mpath"
 
-          OPTS="trans=virtio,version=9p2000.L,cache=mmap,msize=1048576"
-          if [ "$mode" = "ro" ]; then
-            OPTS="$OPTS,ro"
-          elif [ "$mode" = "ro-nocache" ]; then
-            OPTS="trans=virtio,version=9p2000.L,cache=none,msize=1048576,ro"
-          fi
-          ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
+          ${if useVz then ''
+            OPTS=""
+            if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
+              OPTS="ro"
+            fi
+            if [ -n "$OPTS" ]; then
+              ${pkgs.util-linux}/bin/mount -t virtiofs "$tag" "$mpath" -o "$OPTS"
+            else
+              ${pkgs.util-linux}/bin/mount -t virtiofs "$tag" "$mpath"
+            fi
+          '' else ''
+            OPTS="trans=virtio,version=9p2000.L,cache=mmap,msize=1048576"
+            if [ "$mode" = "ro" ]; then
+              OPTS="$OPTS,ro"
+            elif [ "$mode" = "ro-nocache" ]; then
+              OPTS="trans=virtio,version=9p2000.L,cache=none,msize=1048576,ro"
+            fi
+            ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
+          ''}
 
           # Fix ownership for paths under /home/user
           case "$mpath" in
@@ -309,12 +402,13 @@
     systemd.services.llmjail-net-filter = {
       description = "llmjail network filter (DNS whitelist + nftables)";
       wantedBy = [ "multi-user.target" ];
-      after = [ "llmjail-mounts.service" "network-online.target" ];
+      after = [ "llmjail-mounts.service" "network-online.target" ]
+        ++ lib.optionals useVz [ "llmjail-vz-resolver.service" ];
       wants = [ "network-online.target" ];
       before = [ "llmjail-tool.service" ];
       serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
+        Type = "notify";
+        NotifyAccess = "all";
       };
       script = ''
         set -euo pipefail
@@ -328,17 +422,50 @@
 
         if [ "$NET_FILTER" != "1" ]; then
           echo "Network filtering disabled."
+          ${pkgs.systemd}/bin/systemd-notify --ready
           exit 0
+        fi
+
+        ALLOWED_DOMAINS=/llmjail-env/allowed-domains
+        if [ -f /run/llmjail-allowed-domains ]; then
+          ALLOWED_DOMAINS=/run/llmjail-allowed-domains
+        fi
+
+        # Make restarts replace both dnsmasq and the firewall state before the
+        # tool starts.
+        if [ -s /run/dnsmasq-llmjail.pid ]; then
+          DNSMASQ_PID=$(cat /run/dnsmasq-llmjail.pid)
+          kill "$DNSMASQ_PID" 2>/dev/null || true
+          while kill -0 "$DNSMASQ_PID" 2>/dev/null; do
+            sleep 0.05
+          done
+        fi
+        ${pkgs.nftables}/bin/nft delete table inet llmjail_filter 2>/dev/null || true
+
+        UPSTREAM_DNS=""
+        if [ -s /llmjail-env/host-dns ]; then
+          IFS= read -r UPSTREAM_DNS < /llmjail-env/host-dns
+        else
+          for lease in /run/systemd/netif/leases/*; do
+            [ -f "$lease" ] || continue
+            UPSTREAM_DNS=$(${pkgs.gnused}/bin/sed -n 's/^DNS=//p' "$lease" \
+              | ${pkgs.gawk}/bin/awk '{ print $1; exit }')
+            [ -n "$UPSTREAM_DNS" ] && break
+          done
+        fi
+        if [ -z "$UPSTREAM_DNS" ]; then
+          echo "Could not determine the VM NAT DNS server." >&2
+          exit 1
         fi
 
         # Must run before dnsmasq so allowed_ips set exists when
         # dnsmasq populates it on first DNS resolution.
-        ${pkgs.nftables}/bin/nft -f - <<'NFTEOF'
+        ${pkgs.nftables}/bin/nft -f - <<NFTEOF
         table inet llmjail_filter {
           # Populated by dnsmasq --nftset on each successful DNS resolution.
           # HTTP/HTTPS is only allowed to IPs that appear here, blocking
           # direct hardcoded-IP connections that bypass DNS filtering.
-          # Plain set (no `flags interval`) so dnsmasq can add individual
+          # Plain set without interval flags so dnsmasq can add individual
           # /32 entries - interval sets reject single addresses in some
           # nft/dnsmasq combos.
           set allowed_ips {
@@ -354,8 +481,8 @@
 
             udp dport { 67, 68 } accept
 
-            ip daddr 10.0.2.3 udp dport 53 meta skuid root accept
-            ip daddr 10.0.2.3 tcp dport 53 meta skuid root accept
+            ip daddr $UPSTREAM_DNS udp dport 53 meta skuid root accept
+            ip daddr $UPSTREAM_DNS tcp dport 53 meta skuid root accept
 
             ip daddr @allowed_ips tcp dport { 80, 443 } accept
 
@@ -371,14 +498,14 @@
           echo "listen-address=127.0.0.1"
           echo "bind-interfaces"
 
-          # Forward allowed domains to QEMU's DNS; populate nftables set
+          # Forward allowed domains to the VM NAT DNS server; populate nftables set
           # on each successful resolution so the IP becomes reachable.
-          if [ -f /llmjail-env/allowed-domains ]; then
+          if [ -f "$ALLOWED_DOMAINS" ]; then
             while IFS= read -r domain || [ -n "$domain" ]; do
               [ -z "$domain" ] && continue
-              echo "server=/$domain/10.0.2.3"
+              echo "server=/$domain/$UPSTREAM_DNS"
               echo "nftset=/$domain/4#inet#llmjail_filter#allowed_ips"
-            done < /llmjail-env/allowed-domains
+            done < "$ALLOWED_DOMAINS"
           fi
 
           # No default upstream - unmatched queries get REFUSED
@@ -393,12 +520,28 @@
           --conf-file="$DNSMASQ_CONF" \
           --pid-file=/run/dnsmasq-llmjail.pid \
           --user=root \
+          --keep-in-foreground \
           --log-queries=extra \
-          --log-facility=-
+          --log-facility=- &
+        DNSMASQ_PID=$!
+
+        for _ in $(${pkgs.coreutils}/bin/seq 1 100); do
+          [ -s /run/dnsmasq-llmjail.pid ] && break
+          kill -0 "$DNSMASQ_PID" 2>/dev/null || wait "$DNSMASQ_PID"
+          sleep 0.01
+        done
+        if [ ! -s /run/dnsmasq-llmjail.pid ]; then
+          echo "dnsmasq did not become ready." >&2
+          kill "$DNSMASQ_PID" 2>/dev/null || true
+          wait "$DNSMASQ_PID" 2>/dev/null || true
+          exit 1
+        fi
 
         echo "nameserver 127.0.0.1" > /etc/resolv.conf
 
-        echo "Network filtering enabled with $(${pkgs.coreutils}/bin/wc -l < /llmjail-env/allowed-domains) allowed domain(s)."
+        echo "Network filtering enabled with $(${pkgs.coreutils}/bin/wc -l < "$ALLOWED_DOMAINS") allowed domain(s)."
+        ${pkgs.systemd}/bin/systemd-notify --ready
+        wait "$DNSMASQ_PID"
       '';
     };
 
@@ -406,7 +549,7 @@
     # core handles the ioctl (driver-independent), so it delivers SIGWINCH to
     # hvc0's foreground pgrp just as it did for ttyS0.
     systemd.services.llmjail-winsize = {
-      description = "Apply terminal size updates from host via virtio-serial";
+      description = "Apply terminal size updates from host";
       wantedBy = [ "multi-user.target" ];
       before = [ "llmjail-tool.service" ];
       after = [ "llmjail-mounts.service" ];
@@ -420,27 +563,50 @@
       };
       script = ''
         set -eu
-        while [ ! -e /dev/virtio-ports/llmjail.winsize ]; do
-          sleep 0.1
-        done
         PREV=""
-        while IFS=' ' read -r COLS ROWS; do
+        {
+          ${if useVz then ''
+          WINSIZE_DEVICE=""
+          for arg in $(cat /proc/cmdline); do
+            case "$arg" in
+              llmjail.winsize_device=*) WINSIZE_DEVICE="''${arg#llmjail.winsize_device=}" ;;
+            esac
+          done
+          if [ -z "$WINSIZE_DEVICE" ]; then
+            echo "No VZ winsize device was configured." >&2
+            exit 1
+          fi
+          while [ ! -e "$WINSIZE_DEVICE" ]; do
+            sleep 0.1
+          done
+          ${pkgs.coreutils}/bin/cat "$WINSIZE_DEVICE"
+        '' else ''
+          while [ ! -e /dev/virtio-ports/llmjail.winsize ]; do
+            sleep 0.1
+          done
+          ${pkgs.coreutils}/bin/cat /dev/virtio-ports/llmjail.winsize
+          ''}
+        } | while IFS=' ' read -r COLS ROWS; do
           [ -n "$COLS" ] && [ -n "$ROWS" ] || continue
           [ "$COLS $ROWS" = "$PREV" ] && continue
           PREV="$COLS $ROWS"
           ${pkgs.coreutils}/bin/stty cols "$COLS" rows "$ROWS" < /dev/hvc0 2>/dev/null || true
-        done < /dev/virtio-ports/llmjail.winsize
+        done
       '';
     };
 
-    # Register the host store's paths in the guest nix db before the
-    # nix-daemon starts. Preferred source is a snapshot of the host's
+    # Initialize the guest nix db before the nix-daemon starts. Reuse an
+    # existing database when a persistent store disk is attached so paths
+    # realized by an earlier launch remain registered. Load the current
+    # toplevel closure into that database in case the runner was upgraded.
+    #
+    # A new backing store is seeded from a snapshot of the host's
     # /nix/var/nix/db/db.sqlite (llmjail.nix_db_snapshot, taken by the
-    # runner via `sqlite3 VACUUM INTO` and shipped through the envfs share):
-    # installing the file takes milliseconds, vs minutes for --load-db of
-    # a big store. Falls back to the toplevel closure registration dump
-    # (llmjail.nix_db_dump) when no snapshot is available. Mostly copied
-    # from nixpkgs/nixos/modules/virtualisation/qemu-vm.nix.
+    # runner via `sqlite3 VACUUM INTO` and shipped through the envfs share).
+    # Installing the file takes milliseconds, versus minutes for --load-db
+    # of a big store. It falls back to the toplevel closure registration
+    # dump (llmjail.nix_db_dump) when no snapshot is available. Mostly
+    # copied from nixpkgs/nixos/modules/virtualisation/qemu-vm.nix.
     systemd.services.register-nix-paths = {
       unitConfig.DefaultDependencies = false;
       wantedBy = [ "sysinit.target" ];
@@ -468,13 +634,19 @@
           esac
         done
 
-        if [[ -n "$NIX_DB_SNAPSHOT" ]] && [[ -s "$NIX_DB_SNAPSHOT" ]]; then
+        NIX_DB=/nix/var/nix/db/db.sqlite
+        ${pkgs.coreutils}/bin/mkdir -p /nix/var/nix/db
+
+        if [[ -s "$NIX_DB" ]]; then
+          echo "Reusing persistent guest nix db"
+          if [[ -n "$NIX_DB_DUMP" ]]; then
+            echo "Registering current closure nix db dump ($NIX_DB_DUMP)"
+            ${lib.getExe' config.nix.package "nix-store"} --load-db < "$NIX_DB_DUMP"
+          fi
+        elif [[ -n "$NIX_DB_SNAPSHOT" ]] && [[ -s "$NIX_DB_SNAPSHOT" ]]; then
           echo "Installing host nix db snapshot ($NIX_DB_SNAPSHOT)"
-          ${pkgs.coreutils}/bin/mkdir -p /nix/var/nix/db
-          # Drop leftover WAL state from a previous boot on a persistent
-          # store disk; the snapshot is a clean standalone db.
           ${pkgs.coreutils}/bin/rm -f /nix/var/nix/db/db.sqlite-wal /nix/var/nix/db/db.sqlite-shm
-          ${pkgs.coreutils}/bin/install -m 0644 "$NIX_DB_SNAPSHOT" /nix/var/nix/db/db.sqlite
+          ${pkgs.coreutils}/bin/install -m 0644 "$NIX_DB_SNAPSHOT" "$NIX_DB"
         elif [[ -n "$NIX_DB_DUMP" ]]; then
           echo "Loading closure nix db dump ($NIX_DB_DUMP)"
           ${lib.getExe' config.nix.package "nix-store"} --load-db < "$NIX_DB_DUMP"
@@ -482,6 +654,7 @@
           echo "<4> No Nix db snapshot or dump specified, not initializing Nix db"
           exit 1
         fi
+
       '';
     };
 
@@ -565,6 +738,7 @@
 
     systemd.services."serial-getty@ttyS0".enable = false;
     systemd.services."serial-getty@ttyS1".enable = false;
+    systemd.services."serial-getty@ttyAMA0".enable = false;
     systemd.services."serial-getty@hvc0".enable = false;
     systemd.services."getty@tty1".enable = false;
     systemd.services."getty@hvc0".enable = false;

@@ -1,0 +1,28 @@
+DNS configuration
+
+resolver #1
+  search domain[0] : tailnet.invalid
+  nameserver[0] : 100.100.100.100
+  nameserver[1] : fd7a:115c:a1e0::53
+  if_index : 7 (utun0)
+  flags    : Supplemental, Request A records, Request AAAA records
+  reach    : 0x00000003 (Reachable,Transient Connection)
+  order    : 101600
+
+resolver #2
+  nameserver[0] : 2001:db8::53
+  nameserver[1] : 2001:db8::54
+  nameserver[2] : 192.0.2.53
+  nameserver[3] : 192.0.2.54
+  if_index : 8 (en0)
+  flags    : Request A records, Request AAAA records
+  reach    : 0x00000002 (Reachable)
+  order    : 200000
+
+DNS configuration (for scoped queries)
+
+resolver #1
+  nameserver[0] : 192.0.2.1
+  if_index : 9 (en1)
+  flags    : Scoped, Request A records
+  reach    : 0x00000002 (Reachable)
