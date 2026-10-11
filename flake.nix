@@ -10,10 +10,9 @@
     codex-cli-nix.url = "github:sadjow/codex-cli-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
     autolith.url = "github:luciusmagn/autolith";
-    nix-omp.url = "github:jamtur01/nix-omp";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents, autolith, nix-omp, ... }@inputs:
+  outputs = { self, nixpkgs, nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents, autolith, ... }@inputs:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       tools = import ./tools.nix;
@@ -43,7 +42,7 @@
             opencode = llm-agents.packages.${system}.opencode;
             autolith = autolith.packages.${system}.default;
             pi-coding-agent = llm-agents.packages.${system}.pi;
-            omp = nix-omp.packages.${system}.default;
+            omp = nixpkgs-rolling.legacyPackages.${system}.omp;
           };
           tool = pkgs.lib.makeOverridable (
           {
@@ -111,7 +110,7 @@
           opencode = llm-agents.packages.${system}.opencode;
           autolith = autolith.packages.${system}.default;
           pi-coding-agent = llm-agents.packages.${system}.pi;
-          omp = nix-omp.packages.${system}.default;
+          omp = nixpkgs-rolling.legacyPackages.${system}.omp;
         }
       );
     };

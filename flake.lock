@@ -173,24 +173,6 @@
         "type": "github"
       }
     },
-    "nix-omp": {
-      "inputs": {
-        "nixpkgs": "nixpkgs_5"
-      },
-      "locked": {
-        "lastModified": 1786761942,
-        "narHash": "sha256-PYOkZGBlEAuKYlO1PmjUhBCO9rLN6IZYAlrNSMEP4hA=",
-        "owner": "jamtur01",
-        "repo": "nix-omp",
-        "rev": "0a189c47c1126436fbfd7c17cef2be1f54b8fb9d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "jamtur01",
-        "repo": "nix-omp",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1786348146,
@@ -273,22 +255,6 @@
     },
     "nixpkgs_5": {
       "locked": {
-        "lastModified": 1782723713,
-        "narHash": "sha256-oPXCU/SSUokcGaJREHibG1CBX3+s/W7orDWQOZDsEeQ=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "b5aa0fbd538984f6e3d201be0005b4463d8b09f8",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_6": {
-      "locked": {
         "lastModified": 1773734432,
         "narHash": "sha256-IF5ppUWh6gHGHYDbtVUyhwy/i7D261P7fWD1bPefOsw=",
         "owner": "NixOS",
@@ -309,8 +275,7 @@
         "claude-code-nix": "claude-code-nix",
         "codex-cli-nix": "codex-cli-nix",
         "llm-agents": "llm-agents",
-        "nix-omp": "nix-omp",
-        "nixpkgs": "nixpkgs_6",
+        "nixpkgs": "nixpkgs_5",
         "nixpkgs-rolling": "nixpkgs-rolling"
       }
     },
