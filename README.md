@@ -123,6 +123,7 @@ nix run .#claude.foo.devenv
 | Argument | Description |
 |----------|-------------|
 | `devenv` | Adds `devenv` to the runner script's PATH |
+| `docker` | Adds a rootless Docker daemon (with the `compose` and `buildx` plugins) to the VM and whitelists Docker Hub |
 
 ### Examples
 
@@ -156,6 +157,19 @@ bakes the workspace's absolute host path into its environment):
 ```bash
 nix run .#claude.devenv -- --devenv --same-path -- -p "Run the test suite"
 ```
+
+Let the agent build and run containers. Images and layers are stored on the
+`/nix` overlay backing, so use `--store-disk` to keep them out of RAM:
+
+```bash
+nix run .#claude.docker -- --store-disk 20 -- -p "Run the integration tests with docker compose"
+```
+
+The daemon is rootless: it runs as the agent's own unprivileged user, so
+having Docker doesn't give the agent root in the VM, and container traffic
+goes through the same network filter as the agent itself. Docker Hub
+(`docker.io` and its blob CDN hosts) is whitelisted automatically; other
+registries need `--allow-domain` (e.g. `--allow-domain ghcr.io`).
 
 Allow access to additional domains (e.g. for package installs or git cloning):
 
@@ -228,6 +242,7 @@ Default allowed domains per tool:
 | Autolith | `auth.openai.com`, `chatgpt.com` |
 | Pi | `pi.dev`, `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `github.com`, `api.github.com`, `openrouter.ai`, `api.deepseek.com`, `api.mistral.ai`, `api.x.ai`, `api.groq.com`, `api.cerebras.ai` |
 | oh-my-pi | `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `github.com`, `api.github.com`, `openrouter.ai`, `api.deepseek.com`, `api.mistral.ai`, `api.x.ai`, `api.groq.com`, `api.cerebras.ai` |
+| + `docker` build arg | `docker.io`, `production.cloudfront.docker.com`, `production.cloudflare.docker.com`, `docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com` |
 
 
 > [!NOTE]

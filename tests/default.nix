@@ -150,6 +150,85 @@ let
     '';
   };
 
+  # Offline: loads a locally built image instead of pulling from Docker Hub.
+  dockerTestImage = pkgs.dockerTools.buildLayeredImage {
+    name = "llmjail-test";
+    tag = "latest";
+    contents = [ pkgs.busybox ];
+    config.Cmd = [ "/bin/sh" "-c" "echo hello-from-container" ];
+  };
+
+  dockerTest = pkgs.testers.nixosTest {
+    name = "llmjail-docker-smoke";
+
+    nodes.machine = { lib, ... }: {
+      imports = [ ../guests/claude.nix ../guests/docker.nix ];
+      _module.args = { inherit nixpkgs nixpkgs-rolling claude-code; };
+
+      fileSystems."/.nix-lower/store" = lib.mkForce {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [ "size=1M" ];
+      };
+      fileSystems."/llmjail-env" = lib.mkForce {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [ "size=10M" ];
+      };
+      boot.initrd.postMountCommands = lib.mkForce "";
+
+      # Remap `user` like the runner does for a host uid other than 1000, so
+      # the daemon has to start under the remapped uid
+      boot.kernelParams = lib.mkAfter [ "llmjail.user_uid=1234" ];
+
+      systemd.tmpfiles.rules = [
+        "d /workspace 0755 user users -"
+        "f /llmjail-env/env 0644 root root - HOME=/home/user"
+        "f /llmjail-env/tool-args 0644 root root -"
+        "f /llmjail-env/allowed-domains 0644 root root -"
+      ];
+
+      systemd.services.llmjail-tool = {
+        wantedBy = lib.mkForce [ ];
+        serviceConfig.ExecStopPost = lib.mkForce "";
+      };
+
+      virtualisation.memorySize = 1536;
+    };
+
+    testScript = ''
+      machine.start()
+      machine.wait_for_unit("llmjail-docker-ready.service")
+
+      with subtest("daemon is rootless and runs under the remapped uid"):
+          machine.wait_for_unit("docker.service", "user")
+          output = machine.succeed("su - user -c 'docker info --format {{.SecurityOptions}}'")
+          assert "rootless" in output, f"Expected rootless daemon: {output}"
+          machine.succeed("pgrep -u 1234 -x dockerd")
+          machine.fail("pgrep -u root -x dockerd")
+          output = machine.succeed("su - user -c 'echo $DOCKER_HOST'")
+          assert output.strip() == "unix:///run/user/1234/docker.sock", f"Unexpected DOCKER_HOST: {output}"
+
+      with subtest("data root is on the /nix overlay backing"):
+          output = machine.succeed("su - user -c 'docker info --format {{.DockerRootDir}}'")
+          assert output.strip() == "/.nix-backing/docker", f"Unexpected data root: {output}"
+
+      with subtest("user can run a container"):
+          machine.succeed("su - user -c 'docker load < ${dockerTestImage}'")
+          output = machine.succeed("su - user -c 'docker run --rm llmjail-test:latest'")
+          assert "hello-from-container" in output, f"Unexpected container output: {output}"
+
+      with subtest("memory limits are enforced"):
+          output = machine.succeed(
+              "su - user -c 'docker run --rm --memory 64m llmjail-test:latest cat /sys/fs/cgroup/memory.max'"
+          )
+          assert output.strip() == "67108864", f"Unexpected memory.max: {output}"
+
+      with subtest("compose plugin is available"):
+          machine.succeed("su - user -c 'docker compose version'")
+    '';
+  };
+
 in
 {
   claude-smoke = mkSmokeTest {
@@ -189,6 +268,8 @@ in
   };
 
   net-filter-smoke = netFilterTest;
+
+  docker-smoke = dockerTest;
 }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
   autolith-smoke = mkSmokeTest {

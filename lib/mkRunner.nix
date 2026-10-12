@@ -12,6 +12,7 @@ let
   toplevelDbDump = pkgs.closureInfo { rootPaths = [ toplevel ]; };
   qemuPkg = pkgs.qemu_kvm;
   arch = if pkgs.stdenv.hostPlatform.isx86_64 then "x86_64" else "aarch64";
+  allowedDomains = toolDefaults.allowedDomains ++ guest.config.llmjail.extraAllowedDomains;
 in
 pkgs.writeShellApplication {
   name = "llm-jail-${name}";
@@ -286,7 +287,7 @@ pkgs.writeShellApplication {
 
     if [ "$NET_FILTER" = "1" ]; then
       {
-        ${builtins.concatStringsSep "\n    " (map (d: "echo \"${d}\"") toolDefaults.allowedDomains)}
+        ${builtins.concatStringsSep "\n    " (map (d: "echo \"${d}\"") allowedDomains)}
 
         # Auto-extract domains from base URL env vars
         for var in ANTHROPIC_BASE_URL OPENAI_BASE_URL; do

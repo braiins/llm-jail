@@ -25,6 +25,7 @@
 
       flags = {
         devenv = true;
+        docker = true;
       };
       apply = package: setFlags: package.override { flags = setFlags; };
       addFlags = import ./lib/addFlags.nix;
@@ -74,7 +75,8 @@
               modules = [
                 toolDef.guestModule
                 { nixpkgs.config.allowUnfree = true; }
-              ];
+              ]
+              ++ pkgs.lib.optional (flags ? docker) ./guests/docker.nix;
             };
           in import ./lib/mkRunner.nix {
             inherit pkgs guest flags;

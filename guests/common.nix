@@ -10,6 +10,11 @@
       type = lib.types.str;
       description = "CLI flag to pass when --dangerous is enabled";
     };
+    extraAllowedDomains = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Domains added to the tool's default network whitelist by optional guest modules (read by mkRunner)";
+    };
   };
 
   config = {
