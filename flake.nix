@@ -26,6 +26,7 @@
       flags = {
         devenv = true;
         docker = true;
+        virtiofs = true;
       };
       apply = package: setFlags: package.override { flags = setFlags; };
       addFlags = import ./lib/addFlags.nix;
@@ -75,6 +76,7 @@
               modules = [
                 toolDef.guestModule
                 { nixpkgs.config.allowUnfree = true; }
+                  { llmjail.virtiofs = flags ? virtiofs; }
               ]
               ++ pkgs.lib.optional (flags ? docker) ./guests/docker.nix;
             };

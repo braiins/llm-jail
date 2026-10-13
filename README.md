@@ -124,6 +124,17 @@ nix run .#claude.foo.devenv
 |----------|-------------|
 | `devenv` | Adds `devenv` to the runner script's PATH |
 | `docker` | Adds a rootless Docker daemon (with the `compose` and `buildx` plugins) to the VM and whitelists Docker Hub |
+| `virtiofs` | Shares host directories over virtiofs instead of 9p (see below) |
+
+#### virtiofs
+
+`nix run .#claude.virtiofs` mounts the workspace, the host `/nix/store` and all other host
+directories with virtiofs instead of 9p. Metadata-heavy work is much faster: on a full Nixpkgs
+checkout, `git status` takes ~3.3s instead of ~29s.
+
+One `virtiofsd` per shared directory is started as your user (no root needed). Unprivileged user
+namespaces must be allowed. virtiofsd runs with `--sandbox=namespace`, which confines it to the
+shared directory inside a user namespace.
 
 ### Examples
 
@@ -149,6 +160,11 @@ Use a nix dev shell inside the VM:
 
 ```bash
 nix run .#claude -- --nix-env -- -p "Run the test suite"
+```
+
+Use virtiofs instead of 9p for faster mounts:
+```bash
+nix run .#claude.virtiofs
 ```
 
 Use a devenv.sh shell inside the VM (requires `--same-path`, since devenv
@@ -205,7 +221,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 
 - The current working directory -> `/workspace` (read-write)
 - The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, `.pi`, or `.shell` (read-write; Autolith uses its XDG roots plus `CODEX_HOME`/`GROK_HOME`; the other tools use `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `PI_CODING_AGENT_DIR`, or `ZDOTDIR`)
-- `~/.gitconfig` is copied in (9p cannot mount single files)
+- `~/.gitconfig` is copied in (9p/virtiofs cannot mount single files)
 - Host system and user packages -> `/host-sw`, `/host-user-sw` (read-only, NixOS hosts only)
 - Any directories added via `--mount` / `--ro-mount`
 
@@ -272,18 +288,18 @@ Default allowed domains per tool:
 |  writeShellApplication (mkRunner.nix)          |
 |    - parses CLI args                           |
 |    - writes env vars + tool args to tmpdir     |
-|    - sets up 9p virtfs mounts                  |
+|    - sets up 9p (or virtiofs) mounts           |
 |    - optionally creates store disk image       |
 |    - launches qemu-system-*                    |
 +------------------+-----------------------------+
                    | QEMU (direct kernel boot)
 +-- Guest (NixOS) -+-----------------------------+
-|  /nix/store <- overlay (9p lower + disk/tmpfs) |
+|  /nix/store <- overlay (host lower+disk/tmpfs) |
 |  /nix/var   <- bind from disk/tmpfs backing    |
-|  /workspace <- 9p read-write                   |
+|  /workspace <- 9p/virtiofs read-write          |
 |                                                |
 |  systemd                                       |
-|    -> llmjail-mounts: mount 9p shares          |
+|    -> llmjail-mounts: mount host shares        |
 |    -> llmjail-net-filter: dnsmasq + nftables   |
 |    -> llmjail-tool: exec the tool binary       |
 |                                                |
@@ -291,7 +307,7 @@ Default allowed domains per tool:
 +------------------------------------------------+
 ```
 
-No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
+No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p (or virtiofs with the `virtiofs` build-time argument) and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
 
 ## Overriding tool packages
 
