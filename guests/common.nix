@@ -1,5 +1,24 @@
 { config, lib, pkgs, nixpkgs-rolling, ... }:
 
+let
+  # Read-only boot-time share (store lower layer, envfs). With virtiofs,
+  # caching is chosen host-side by virtiofsd's --cache.
+  # 9p: msize=1M because the 8KB default round-trips every
+  # read/readdir/stat beyond it, crippling metadata-heavy tool I/O.
+  # cache=loose enables client readahead; cache=none serializes every read
+  # request-by-request, which made installing the multi-MB nix db snapshot
+  # from envfs take seconds.
+  roBootShare = device: {
+    inherit device;
+    fsType = if config.llmjail.virtiofs then "virtiofs" else "9p";
+    options =
+      if config.llmjail.virtiofs then
+        [ "ro" ]
+      else
+        [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
+    neededForBoot = true;
+  };
+in
 {
   options.llmjail = {
     toolBinary = lib.mkOption {
@@ -14,6 +33,11 @@
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = "Domains added to the tool's default network whitelist by optional guest modules (read by mkRunner)";
+    };
+    virtiofs = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Mount host shares with virtiofs instead of 9p (set by the `virtiofs` build-time argument)";
     };
   };
 
@@ -30,7 +54,8 @@
       "virtio_blk"
       "virtio_net"
       "virtio_rng"
-    ];
+    ]
+    ++ lib.optional config.llmjail.virtiofs "virtiofs";
     # Force-load overlay in initrd: availableKernelModules only allows
     # autoload, but the systemd-initrd path doesn't always trigger it for
     # `mount -t overlay`, so make it explicit.
@@ -40,10 +65,10 @@
     boot.initrd.supportedFilesystems = [ "ext4" ];
 
     # Set up the /nix/store overlay and /nix/var bind in initrd. Runs after
-    # the 9p store mount (RequiresMountsFor) and ordered before
+    # the host store mount (RequiresMountsFor) and ordered before
     # initrd-fs.target so stage 2 sees the overlay. The backing device
     # (ext4 disk or tmpfs) is chosen at runtime from llmjail.store_disk=1
-    # on the kernel cmdline. The 9p mount is used directly as the overlay
+    # on the kernel cmdline. The store mount is used directly as the overlay
     # lower layer - overlayfs does not reliably cross submount boundaries,
     # so the lower must be the mounted filesystem itself. /nix/var is
     # bind-mounted from the backing so build artifacts land there instead
@@ -105,30 +130,14 @@
 
     # Host nix store read-only (lower layer for the /nix/store overlay above).
     # Mounted outside /nix so it isn't hidden when the overlay covers /nix/store.
-    # msize=1M: the 8KB default round-trips every read/readdir/stat beyond it,
-    # crippling metadata-heavy tool I/O on large workspaces.
-    fileSystems."/.nix-lower/store" = {
-      device = "nix-store";
-      fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
-      neededForBoot = true;
-    };
+    fileSystems."/.nix-lower/store" = roBootShare "nix-store";
 
     # /nix/store overlay and /nix/var bind-mount are done by the
     # llmjail-store-overlay initrd service (above) which orders itself
-    # after the 9p lower layer is mounted.
+    # after the lower layer is mounted.
     # /llmjail-env: small config files plus the host nix db snapshot.
-    # cache=loose (same as the store lower mount below): the share is
-    # read-only and its files are immutable during the run, and loose
-    # enables client readahead. cache=none serializes every 9p read
-    # request-by-request, which made installing the multi-MB db snapshot
-    # take seconds.
-    fileSystems."/llmjail-env" = {
-      device = "envfs";
-      fsType = "9p";
-      options = [ "trans=virtio" "version=9p2000.L" "cache=loose" "msize=1048576" "ro" ];
-      neededForBoot = true;
-    };
+    # Read-only and immutable during the run, so it is cached aggressively.
+    fileSystems."/llmjail-env" = roBootShare "envfs";
 
     networking.useDHCP = false;
     networking.nameservers = [ "10.0.2.3" ];
@@ -181,9 +190,9 @@
     };
 
     # Parses kernel cmdline for llmjail.mounts=tag0:/path:rw,tag1:/path:ro,...
-    # and mounts each entry via 9p.
+    # and mounts each entry via 9p or virtiofs (build-time `virtiofs` arg).
     systemd.services.llmjail-mounts = {
-      description = "Mount llmjail 9p shares from kernel cmdline";
+      description = "Mount llmjail host shares from kernel cmdline";
       wantedBy = [ "multi-user.target" ];
       before = [ "llmjail-tool.service" ];
       after = [ "local-fs.target" ];
@@ -213,13 +222,22 @@
           echo "Mounting $tag -> $mpath ($mode)"
           ${pkgs.coreutils}/bin/mkdir -p "$mpath"
 
-          OPTS="trans=virtio,version=9p2000.L,cache=mmap,msize=1048576"
-          if [ "$mode" = "ro" ]; then
-            OPTS="$OPTS,ro"
-          elif [ "$mode" = "ro-nocache" ]; then
-            OPTS="trans=virtio,version=9p2000.L,cache=none,msize=1048576,ro"
-          fi
-          ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
+          ${if config.llmjail.virtiofs then ''
+            # Caching is set host-side per share (virtiofsd --cache)
+            OPTS="rw"
+            if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
+              OPTS="ro"
+            fi
+            ${pkgs.util-linux}/bin/mount -t virtiofs "$tag" "$mpath" -o "$OPTS"
+          '' else ''
+            OPTS="trans=virtio,version=9p2000.L,cache=mmap,msize=1048576"
+            if [ "$mode" = "ro" ]; then
+              OPTS="$OPTS,ro"
+            elif [ "$mode" = "ro-nocache" ]; then
+              OPTS="trans=virtio,version=9p2000.L,cache=none,msize=1048576,ro"
+            fi
+            ${pkgs.util-linux}/bin/mount -t 9p "$tag" "$mpath" -o "$OPTS"
+          ''}
 
           # Fix ownership for paths under /home/user
           case "$mpath" in
@@ -230,7 +248,7 @@
         done
 
         # Copy dotfiles provided via envfs (can't mount individual files via
-        # 9p). Currently just .gitconfig, placed there by mkRunner.
+        # 9p/virtiofs). Currently just .gitconfig, placed there by mkRunner.
         for src in /llmjail-env/.*; do
           [ -f "$src" ] || continue
           name="''${src##*/}"
@@ -266,7 +284,7 @@
             [ ''${#EXPR[@]} -eq 0 ] && continue
 
             # -xdev keeps the walk inside the root's filesystem (the
-            # 9p mount), so we never wander into nested mounts.
+            # share mount), so we never wander into nested mounts.
             # -prune skips descent into matched dirs (cheap on big trees).
             ${pkgs.findutils}/bin/find "$root" -xdev \( "''${EXPR[@]}" \) -prune -print0 |
               while IFS= read -r -d "" target; do
