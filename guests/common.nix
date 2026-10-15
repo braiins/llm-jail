@@ -17,7 +17,7 @@
     # Switch to systemd-initrd (default in 26.11). Required because we use
     # boot.initrd.systemd.services below to set up the /nix/store overlay.
     boot.initrd.systemd.enable = true;
-    boot.kernelParams = [ "console=ttyS1" ];
+    boot.kernelParams = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "console=ttyAMA0" else "console=ttyS1") ];
     boot.initrd.availableKernelModules = [
       "9p"
       "9pnet_virtio"
@@ -57,7 +57,7 @@
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        # Mirror stdout/stderr to the kernel.log file (ttyS1) so failures
+        # Mirror stdout/stderr to kernel.log so failures
         # are visible before we have journalctl. Drop after stabilizing.
         StandardOutput = "journal+console";
         StandardError = "journal+console";
@@ -563,6 +563,7 @@
         };
       };
 
+    systemd.services."serial-getty@ttyAMA0".enable = false;
     systemd.services."serial-getty@ttyS0".enable = false;
     systemd.services."serial-getty@ttyS1".enable = false;
     systemd.services."serial-getty@hvc0".enable = false;

@@ -500,7 +500,7 @@ pkgs.writeShellApplication {
       : > "$RUNDIR/mask-roots"
     fi
 
-    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init console=ttyS1 llmjail.mounts=$MOUNT_CMDLINE"
+    KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init llmjail.mounts=$MOUNT_CMDLINE"
 
     if [ "$STORE_DISK" -gt 0 ]; then
       KERNEL_PARAMS="$KERNEL_PARAMS llmjail.store_disk=1"
@@ -552,9 +552,8 @@ pkgs.writeShellApplication {
     #
     # -display none (not -nographic): we wire stdio explicitly via the mux
     # chardev; -nographic assumes a single serial-on-stdio and conflicts.
-    # Two serials are kept so the kernel `console=ttyS1` resolves: ttyS0=null
-    # (unused now that the tool is on hvc0), ttyS1 -> kernel.log. Without
-    # ttyS1 present the console falls back to hvc0 and a getty grabs it.
+    # Route the kernel console to kernel.log: the first PL011 UART on ARM,
+    # or the second 16550A UART on x86. Keep it separate from the tool on hvc0.
     #
     # Console output pump. QEMU's virtconsole frontend silently DROPS guest
     # output when the host-side chardev write would block (EAGAIN) - console
@@ -569,7 +568,9 @@ pkgs.writeShellApplication {
     # unaffected. The pipeline is foreground: when QEMU exits, the pipe
     # closes, EOF drains the tail, pv exits, and pipefail propagates QEMU's
     # status - no FIFO, no background job, no cleanup.
+    # ARM virt defaults to GICv2; max also supports hosts with GICv3-only KVM.
     qemu-system-${arch} \
+      ${lib.optionalString pkgs.stdenv.hostPlatform.isAarch64 "-machine virt,gic-version=max"} \
       "''${KVM_ARGS[@]}" \
       -m "$MEM" \
       -smp "$VCPU" \
@@ -583,7 +584,7 @@ pkgs.writeShellApplication {
       -device virtconsole,chardev=cons0,nr=0 \
       -chardev "socket,id=winsize,path=$WINSIZE_SOCK,server=on,wait=off" \
       -device virtserialport,chardev=winsize,name=llmjail.winsize \
-      -serial null \
+      ${lib.optionalString pkgs.stdenv.hostPlatform.isx86_64 "-serial null"} \
       -serial file:"$RUNDIR/kernel.log" \
       -no-reboot \
       -device virtio-rng-pci \
