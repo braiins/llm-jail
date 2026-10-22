@@ -26,12 +26,14 @@ pkgs.writeShellApplication {
     pkgs.socat
     pkgs.sqlite
   ]
-  ++ (lib.optional (flags ? devenv) pkgs.devenv);
+  ++ (lib.optional (flags ? devenv) pkgs.devenv)
+  ++ (lib.optional (flags ? virtiofs) pkgs.virtiofsd);
   text = ''
     set -euo pipefail
 
     MEM="${toString toolDefaults.mem}"
     VCPU="${toString toolDefaults.vcpu}"
+    VIRTIOFS=${if flags ? virtiofs then "1" else "0"}
     DANGEROUS=0
     NIX_ENV=0
     DEVENV=0
@@ -246,7 +248,7 @@ pkgs.writeShellApplication {
       done
 
       # Forward host shell (resolved through symlinks so the /nix/store path
-      # is exposed, which the guest can reach via the 9p store mount even
+      # is exposed, which the guest can reach via the store share even
       # though /run/current-system/sw is remapped to /host-sw).
       if [ -n "''${SHELL:-}" ]; then
         RESOLVED_SHELL=$(readlink -f "$SHELL" 2>/dev/null || true)
@@ -389,19 +391,110 @@ pkgs.writeShellApplication {
 
     MOUNT_IDX=0
     MOUNT_CMDLINE=""
-    VIRTFS_ARGS=()
+    SHARE_ARGS=()
     MASK_ROOTS=()
+
+    if [ "$VIRTIOFS" = "1" ]; then
+      # One virtiofsd per share (it serves a single directory), started as
+      # the invoking user - no root needed. --sandbox=namespace pivot_roots
+      # into the share inside an unprivileged user namespace, so symlinks
+      # cannot escape it. That namespace only maps our own uid/gid, so
+      # every guest uid/gid is squashed to ours (like 9p's
+      # security_model=none) and host files we don't own (root's /nix/store
+      # shows up as the overflow id 65534) are reported to the guest as root.
+      HOST_UID=$(id -u)
+      HOST_GID=$(id -g)
+      VIRTIOFSD_PIDS=()
+      cleanup_virtiofsd() {
+        kill "''${VIRTIOFSD_PIDS[@]+"''${VIRTIOFSD_PIDS[@]}"}" 2>/dev/null
+        # Surface virtiofsd errors before cleanup_rundir deletes the logs
+        local log
+        for log in "$RUNDIR"/virtiofsd-*.log; do
+          if [ -s "$log" ]; then
+            echo "''${log##*/}:" >&2
+            cat "$log" >&2
+          fi
+        done
+      }
+      CLEANUP_FUNCS+=(cleanup_virtiofsd)
+
+      # vhost-user needs guest RAM in shared memory so virtiofsd can map it
+      SHARE_ARGS+=(
+        "-object" "memory-backend-memfd,id=mem,size=''${MEM}M,share=on"
+        "-machine" "memory-backend=mem"
+      )
+    fi
+
+    # Exports HOSTPATH to the guest under TAG by appending QEMU args to
+    # SHARE_ARGS. MODE is rw, ro, ro-nocache, or ro-immutable (contents never
+    # change during the run, e.g. envfs).
+    add_share() {
+      local tag="$1" hostpath="$2" mode="$3"
+
+      if [ "$VIRTIOFS" != "1" ]; then
+        # Caching for 9p is chosen guest-side by the mount options
+        local virtfs="local,path=$hostpath,security_model=none,mount_tag=$tag"
+        if [ "$mode" != "rw" ]; then
+          virtfs="$virtfs,readonly=on"
+        fi
+        SHARE_ARGS+=("-virtfs" "$virtfs")
+        return
+      fi
+
+      local sock="$RUNDIR/virtiofsd-$tag.sock"
+      local args=(
+        "--socket-path=$sock"
+        "--shared-dir=$hostpath"
+        "--sandbox=namespace"
+        "--log-level=error"
+        "--translate-uid=squash-guest:0:$HOST_UID:4294967295"
+        "--translate-gid=squash-guest:0:$HOST_GID:4294967295"
+        "--translate-uid=host:65534:0:1"
+        "--translate-gid=host:65534:0:1"
+      )
+      case "$mode" in
+        rw)           ;;
+        ro)           args+=("--readonly") ;;
+        ro-nocache)   args+=("--readonly" "--cache=never") ;;
+        ro-immutable) args+=("--readonly" "--cache=always") ;;
+        *)
+          echo "ERROR: unknown share mode '$mode' for $hostpath" >&2
+          exit 1
+          ;;
+      esac
+      # Logged to a file, not the terminal: the tool's TUI owns the tty
+      # once QEMU starts. Printed by cleanup_virtiofsd after the VM exits.
+      local log="$RUNDIR/virtiofsd-$tag.log"
+      virtiofsd "''${args[@]}" 2>"$log" &
+      VIRTIOFSD_PIDS+=($!)
+
+      # QEMU fails outright if the socket isn't there yet
+      local i
+      for (( i=0; i < 100; i++ )); do
+        [ -S "$sock" ] && break
+        sleep 0.05
+      done
+      if [ ! -S "$sock" ]; then
+        echo "ERROR: virtiofsd did not start for $hostpath (ensure unprivileged user namespaces are allowed)" >&2
+        exit 1
+      fi
+
+      SHARE_ARGS+=(
+        "-chardev" "socket,id=fs-$tag,path=$sock"
+        "-device" "vhost-user-fs-pci,queue-size=1024,chardev=fs-$tag,tag=$tag"
+      )
+    }
+
+    # Not ro-immutable: host nix builds/GC change the store during the run
+    add_share nix-store /nix/store ro
+    add_share envfs "$RUNDIR" ro-immutable
 
     add_mount() {
       local hostpath="$1" guestpath="$2" mode="$3"
       local tag="mount''${MOUNT_IDX}"
       MOUNT_IDX=$((MOUNT_IDX + 1))
 
-      local virtfs="local,path=$hostpath,security_model=none,mount_tag=$tag"
-      if [ "$mode" = "ro" ] || [ "$mode" = "ro-nocache" ]; then
-        virtfs="$virtfs,readonly=on"
-      fi
-      VIRTFS_ARGS+=("-virtfs" "$virtfs")
+      add_share "$tag" "$hostpath" "$mode"
 
       if [ -n "$MOUNT_CMDLINE" ]; then
         MOUNT_CMDLINE="$MOUNT_CMDLINE,$tag:$guestpath:$mode"
@@ -422,12 +515,12 @@ pkgs.writeShellApplication {
     MASK_ROOTS+=("$WORKSPACE_DIR")
 
     validate_path "$STATE_DIR" "state directory"
-    # 9p refuses to share a non-existent path; first run starts empty and
+    # 9p/virtiofs refuse to share a non-existent path; first run starts empty and
     # the tool goes through its login/onboarding flow inside the jail.
     mkdir -p "$STATE_DIR"
     add_mount "$STATE_DIR" "/home/user/${toolDefaults.configDirName}" "rw"
 
-    # Copy .gitconfig into the envfs share (9p can't mount single files)
+    # Copy .gitconfig into the envfs share (9p/virtiofs can't mount single files)
     if [ -f "$HOME/.gitconfig" ]; then
       cp "$HOME/.gitconfig" "$RUNDIR/.gitconfig"
     fi
@@ -590,9 +683,7 @@ pkgs.writeShellApplication {
       -no-reboot \
       -device virtio-rng-pci \
       -nic user,model=virtio-net-pci \
-      -virtfs local,path=/nix/store,security_model=none,mount_tag=nix-store,readonly=on \
-      -virtfs "local,path=$RUNDIR,security_model=none,mount_tag=envfs,readonly=on" \
-      "''${VIRTFS_ARGS[@]}" \
+      "''${SHARE_ARGS[@]}" \
       "''${DISK_ARGS[@]}" \
       | pv -q -B 64M
   '';
