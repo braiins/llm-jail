@@ -40,7 +40,7 @@ pkgs.writeShellApplication {
     IMMUTABLE=0
     SAME_PATH=0
     LLMJAIL_TMPDIR=''${TMPDIR:-/tmp}
-    STORE_DISK=0
+    DISK_SIZE=0
     NET_FILTER=1
     EXTRA_DOMAINS=()
     EXTRA_MOUNTS=()
@@ -81,7 +81,8 @@ pkgs.writeShellApplication {
                             Applied at boot only; new matches post-boot are not masked.
       --nix-env             Capture nix develop environment from workspace flake
       --devenv              Capture devenv.sh shell environment from workspace
-      --store-disk SIZE     Create a disk-backed /nix overlay (SIZE in GB)
+      --disk SIZE           Use an ext4 disk (SIZE in GB) as the root filesystem
+                            instead of RAM
       --allow-domain DOMAIN Add domain to network whitelist (repeatable)
       --no-net-filter       Disable network filtering (unrestricted access)
       --mem SIZE            Memory in MB (default: ${toString toolDefaults.mem})
@@ -127,7 +128,9 @@ pkgs.writeShellApplication {
         --allow-domain)  EXTRA_DOMAINS+=("$2"); shift 2 ;;
         --no-net-filter) NET_FILTER=0; shift ;;
         --mask)        MASK_PATTERNS+=("$2"); shift 2 ;;
-        --store-disk)  STORE_DISK="$2"; shift 2 ;;
+        --disk)        DISK_SIZE="$2"; shift 2 ;;
+        --store-disk)  echo "WARNING: --store-disk is deprecated; use --disk" >&2
+                       DISK_SIZE="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
         --vcpu)        VCPU="$2"; shift 2 ;;
         -h|--help)     usage ;;
@@ -596,8 +599,14 @@ pkgs.writeShellApplication {
 
     KERNEL_PARAMS="$(cat ${toplevel}/kernel-params) init=${toplevel}/init llmjail.mounts=$MOUNT_CMDLINE"
 
-    if [ "$STORE_DISK" -gt 0 ]; then
-      KERNEL_PARAMS="$KERNEL_PARAMS llmjail.store_disk=1"
+    # The guest has no fileSystems."/"; systemd's initrd fstab-generator
+    # mounts the root from these. `rw` because systemd mounts a block-device
+    # root read-only otherwise. Without a size option the tmpfs root can grow
+    # to half of the guest RAM.
+    if [ "$DISK_SIZE" -gt 0 ]; then
+      KERNEL_PARAMS="$KERNEL_PARAMS root=/dev/vda rootfstype=ext4 rw"
+    else
+      KERNEL_PARAMS="$KERNEL_PARAMS root=tmpfs rootflags=mode=0755"
     fi
 
     if [ "$NET_FILTER" = "1" ]; then
@@ -615,10 +624,10 @@ pkgs.writeShellApplication {
     KERNEL_PARAMS="$KERNEL_PARAMS llmjail.nix_db_dump=${toplevelDbDump}/registration"
 
     DISK_ARGS=()
-    if [ "$STORE_DISK" -gt 0 ]; then
-      truncate -s "''${STORE_DISK}G" "$RUNDIR/store.img"
-      mkfs.ext4 -q "$RUNDIR/store.img"
-      DISK_ARGS+=("-drive" "file=$RUNDIR/store.img,format=raw,if=virtio,discard=on")
+    if [ "$DISK_SIZE" -gt 0 ]; then
+      truncate -s "''${DISK_SIZE}G" "$RUNDIR/disk.img"
+      mkfs.ext4 -q "$RUNDIR/disk.img"
+      DISK_ARGS+=("-drive" "file=$RUNDIR/disk.img,format=raw,if=virtio,discard=on")
     fi
 
     KVM_ARGS=()

@@ -61,17 +61,21 @@ in
 
     boot.initrd.supportedFilesystems = [ "ext4" ];
 
-    # Set up the /nix/store overlay and /nix/var bind in initrd. Runs after
-    # the host store mount (RequiresMountsFor) and ordered before
-    # initrd-fs.target so stage 2 sees the overlay. The backing device
-    # (ext4 disk or tmpfs) is chosen at runtime from llmjail.store_disk=1
-    # on the kernel cmdline. The store mount is used directly as the overlay
-    # lower layer - overlayfs does not reliably cross submount boundaries,
-    # so the lower must be the mounted filesystem itself. /nix/var is
-    # bind-mounted from the backing so build artifacts land there instead
-    # of the root tmpfs.
+    # The root filesystem is chosen at runtime by the runner, which appends
+    # `root=tmpfs` or, under --disk, `root=/dev/vda` to the kernel cmdline
+    # for systemd's initrd fstab-generator. So there is no fileSystems."/",
+    # and NixOS must not add its own `root=` to kernel-params.
+    boot.initrd.systemd.root = null;
+
+    # Set up the /nix/store overlay in initrd. Runs after the host store
+    # mount (RequiresMountsFor, which also orders it after the root at
+    # /sysroot) and before initrd-fs.target so stage 2 sees the overlay. The
+    # store mount is used directly as the overlay lower layer - overlayfs
+    # does not reliably cross submount boundaries, so the lower must be the
+    # mounted filesystem itself. The upper layer lives on the root
+    # filesystem, outside the /nix/store the overlay covers.
     boot.initrd.systemd.services.llmjail-store-overlay = {
-      description = "Set up /nix/store overlay and /nix/var bind";
+      description = "Set up /nix/store overlay";
       # Pulled in by initrd-fs.target AND by initrd-find-nixos-closure.service
       # (the latter races us in 26.05+ and inspects /sysroot/nix/store before
       # the overlay exists - so we must complete before it starts).
@@ -92,46 +96,21 @@ in
       script = ''
         set -eu
 
-        STORE_DISK=0
-        for arg in $(cat /proc/cmdline); do
-          case "$arg" in
-            llmjail.store_disk=1) STORE_DISK=1 ;;
-          esac
-        done
-
-        mkdir -p /sysroot/.nix-backing
-        if [ "$STORE_DISK" = "1" ]; then
-          mount /dev/vda /sysroot/.nix-backing
-        else
-          mount -t tmpfs tmpfs /sysroot/.nix-backing
-        fi
         mkdir -p \
-          /sysroot/.nix-backing/store-upper \
-          /sysroot/.nix-backing/store-work \
-          /sysroot/.nix-backing/var
-
-        mkdir -p /sysroot/nix/store
+          /sysroot/.nix-upper/store \
+          /sysroot/.nix-upper/work \
+          /sysroot/nix/store
         mount -t overlay overlay /sysroot/nix/store \
-          -o "lowerdir=/sysroot/.nix-lower/store,upperdir=/sysroot/.nix-backing/store-upper,workdir=/sysroot/.nix-backing/store-work"
-
-        mkdir -p /sysroot/nix/var
-        mount --bind /sysroot/.nix-backing/var /sysroot/nix/var
+          -o "lowerdir=/sysroot/.nix-lower/store,upperdir=/sysroot/.nix-upper/store,workdir=/sysroot/.nix-upper/work"
       '';
-    };
-
-    fileSystems."/" = {
-      device = "tmpfs";
-      fsType = "tmpfs";
-      options = [ "mode=0755" "size=2G" ];
     };
 
     # Host nix store read-only (lower layer for the /nix/store overlay above).
     # Mounted outside /nix so it isn't hidden when the overlay covers /nix/store.
     fileSystems."/.nix-lower/store" = roBootShare "nix-store";
 
-    # /nix/store overlay and /nix/var bind-mount are done by the
-    # llmjail-store-overlay initrd service (above) which orders itself
-    # after the lower layer is mounted.
+    # The /nix/store overlay is set up by the llmjail-store-overlay initrd
+    # service (above) which orders itself after the lower layer is mounted.
     # /llmjail-env: small config files plus the host nix db snapshot.
     # Read-only and immutable during the run, so it is cached aggressively.
     fileSystems."/llmjail-env" = roBootShare "envfs";
