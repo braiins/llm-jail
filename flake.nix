@@ -12,7 +12,7 @@
     autolith.url = "github:luciusmagn/autolith";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents, autolith, ... }@inputs:
+  outputs = { self, nixpkgs, nixpkgs-rolling, claude-code-nix, codex-cli-nix, llm-agents, autolith, ... }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       tools = import ./tools.nix;
@@ -33,7 +33,7 @@
 
       mkTool = system: toolName: toolDef:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = nixpkgs-rolling.legacyPackages.${system};
           # Default tool packages - overridable via `.override { claude-code = ...; }`
           # on the resulting runner derivation. Consumers can swap any of these
           # without forking the flake.

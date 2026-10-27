@@ -444,7 +444,7 @@ pkgs.writeShellApplication {
       local sock="$RUNDIR/virtiofsd-$tag.sock"
       local args=(
         "--socket-path=$sock"
-        "--shared-dir=$hostpath"
+        "--shared-dir=$(realpath "$hostpath")"
         "--sandbox=namespace"
         "--log-level=error"
         "--translate-uid=squash-guest:0:$HOST_UID:4294967295"
@@ -673,7 +673,7 @@ pkgs.writeShellApplication {
       -append "$KERNEL_PARAMS" \
       -display none \
       -chardev stdio,id=cons0,mux=on,signal=off \
-      -mon chardev=cons0,mode=readline \
+      -object monitor-hmp,id=mon0,chardev=cons0,readline=on \
       -device virtio-serial-pci \
       -device virtconsole,chardev=cons0,nr=0 \
       -chardev "socket,id=winsize,path=$WINSIZE_SOCK,server=on,wait=off" \

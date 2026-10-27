@@ -43,9 +43,6 @@ in
 
   config = {
     boot.loader.grub.enable = false;
-    # Switch to systemd-initrd (default in 26.11). Required because we use
-    # boot.initrd.systemd.services below to set up the /nix/store overlay.
-    boot.initrd.systemd.enable = true;
     boot.kernelParams = [ (if pkgs.stdenv.hostPlatform.isAarch64 then "console=ttyAMA0" else "console=ttyS1") ];
     boot.initrd.availableKernelModules = [
       "9p"

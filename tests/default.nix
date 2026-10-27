@@ -20,7 +20,6 @@ let
           fsType = "tmpfs";
           options = [ "size=10M" ];
         };
-        boot.initrd.postMountCommands = lib.mkForce "";
 
         # Provide mock envfs contents for the mounts service
         systemd.tmpfiles.rules = [
@@ -106,7 +105,6 @@ let
         fsType = "tmpfs";
         options = [ "size=10M" ];
       };
-      boot.initrd.postMountCommands = lib.mkForce "";
 
       # Enable net filtering via kernel cmdline
       boot.kernelParams = lib.mkAfter [ "llmjail.net_filter=1" ];
@@ -175,7 +173,6 @@ let
         fsType = "tmpfs";
         options = [ "size=10M" ];
       };
-      boot.initrd.postMountCommands = lib.mkForce "";
 
       # Remap `user` like the runner does for a host uid other than 1000, so
       # the daemon has to start under the remapped uid
