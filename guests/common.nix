@@ -470,8 +470,7 @@ in
         if [[ -n "$NIX_DB_SNAPSHOT" ]] && [[ -s "$NIX_DB_SNAPSHOT" ]]; then
           echo "Installing host nix db snapshot ($NIX_DB_SNAPSHOT)"
           ${pkgs.coreutils}/bin/mkdir -p /nix/var/nix/db
-          # Drop leftover WAL state from a previous boot on a persistent
-          # store disk; the snapshot is a clean standalone db.
+          # Drop any WAL state; the snapshot is a clean standalone db.
           ${pkgs.coreutils}/bin/rm -f /nix/var/nix/db/db.sqlite-wal /nix/var/nix/db/db.sqlite-shm
           ${pkgs.coreutils}/bin/install -m 0644 "$NIX_DB_SNAPSHOT" /nix/var/nix/db/db.sqlite
         elif [[ -n "$NIX_DB_DUMP" ]]; then
