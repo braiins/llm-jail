@@ -1,6 +1,6 @@
 # llm-jail
 
-Hardware-level sandbox for running coding agents inside QEMU microVMs. No containers, no disk images - each session boots a minimal NixOS guest on tmpfs with the host Nix store shared read-only.
+Hardware-level sandbox for running coding agents inside QEMU microVMs. No containers, no persistent disk images - each session boots a minimal NixOS guest on tmpfs (or a throwaway ext4 disk with `--disk`) with the host Nix store shared read-only.
 
 Supported tools:
 
@@ -95,7 +95,7 @@ llm-jail-{claude,codex,copilot,opencode,autolith,pi,shell} [options] [-- tool-ar
 | `--ro-mount PATH` | Extra read-only mount (repeatable) | - |
 | `--nix-env` | Capture `nix develop` environment from workspace | off |
 | `--devenv` | Capture `devenv.sh` shell environment from workspace | off |
-| `--store-disk SIZE` | Create a disk-backed /nix overlay (SIZE in GB) | off |
+| `--disk SIZE` | Use an ext4 disk (SIZE in GB) as the root filesystem instead of RAM | off |
 | `--allow-domain DOMAIN` | Add domain to network whitelist (repeatable) | tool defaults |
 | `--no-net-filter` | Disable network filtering (unrestricted access) | filtering on |
 | `--mem SIZE` | VM memory in MB | 4096 |
@@ -175,10 +175,10 @@ nix run .#claude.devenv -- --devenv --same-path -- -p "Run the test suite"
 ```
 
 Let the agent build and run containers. Images and layers are stored on the
-`/nix` overlay backing, so use `--store-disk` to keep them out of RAM:
+root filesystem, so use `--disk` to keep them out of RAM:
 
 ```bash
-nix run .#claude.docker -- --store-disk 20 -- -p "Run the integration tests with docker compose"
+nix run .#claude.docker -- --disk 20 -- -p "Run the integration tests with docker compose"
 ```
 
 The daemon is rootless: it runs as the agent's own unprivileged user, so
@@ -199,10 +199,10 @@ Disable network filtering entirely:
 nix run .#claude -- --no-net-filter
 ```
 
-Run `nix build` inside the VM with extra storage (root tmpfs is only 2G):
+Run `nix build`, or anything else that writes a lot outside the mounts, with extra storage (the tmpfs root is limited to half the VM memory):
 
 ```bash
-nix run .#claude -- --store-disk 20 -- -p "nix build and run the tests"
+nix run .#claude -- --disk 20 -- -p "nix build and run the tests"
 ```
 
 Drop into your own shell inside the sandbox to inspect mounts or reproduce tool behavior manually:
@@ -217,7 +217,7 @@ The shell tool honors `$SHELL` (resolved through symlinks so the `/nix/store` pa
 
 ## What's isolated
 
-**Filesystem.** The guest boots on a tmpfs root. Only explicitly mounted directories are visible:
+**Filesystem.** The guest boots on a tmpfs root (or a throwaway ext4 disk with `--disk`). Only explicitly mounted directories are visible:
 
 - The current working directory -> `/workspace` (read-write)
 - The jail-private tool state dir `~/.config/llm-jail/<tool>/<profile>` -> `/home/user/.claude`, `.codex`, `.copilot`, `.opencode`, `.autolith`, `.pi`, or `.shell` (read-write; Autolith uses its XDG roots plus `CODEX_HOME`/`GROK_HOME`; the other tools use `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `PI_CODING_AGENT_DIR`, or `ZDOTDIR`)
@@ -289,13 +289,13 @@ Default allowed domains per tool:
 |    - parses CLI args                           |
 |    - writes env vars + tool args to tmpdir     |
 |    - sets up 9p (or virtiofs) mounts           |
-|    - optionally creates store disk image       |
+|    - optionally creates root disk image        |
 |    - launches qemu-system-*                    |
 +------------------+-----------------------------+
                    | QEMU (direct kernel boot)
 +-- Guest (NixOS) -+-----------------------------+
-|  /nix/store <- overlay (host lower+disk/tmpfs) |
-|  /nix/var   <- bind from disk/tmpfs backing    |
+|  /          <- tmpfs, or ext4 disk (--disk)    |
+|  /nix/store <- overlay (host lower + rootfs)   |
 |  /workspace <- 9p/virtiofs read-write          |
 |                                                |
 |  systemd                                       |
@@ -307,7 +307,7 @@ Default allowed domains per tool:
 +------------------------------------------------+
 ```
 
-No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p (or virtiofs with the `virtiofs` build-time argument) and used directly as the lower layer of a `/nix/store` overlay. `/nix/var` is bind-mounted from the same backing volume so build artifacts (`/nix/var/nix/builds/`) land on disk rather than the root tmpfs. When `--store-disk` is used, a sparse ext4 image backs both; otherwise a tmpfs is used. The image is cleaned up automatically when the VM exits.
+No persistent disk images are involved. The guest kernel and initrd are built by NixOS and passed to QEMU via `-kernel` / `-initrd`. The host Nix store is shared read-only over 9p (or virtiofs with the `virtiofs` build-time argument) and used directly as the lower layer of a `/nix/store` overlay whose upper layer lives on the root filesystem. The root is a tmpfs by default; with `--disk` it is a sparse ext4 image instead, so everything the guest writes outside the host mounts (new store paths, `/nix/var/nix/builds/`, `$HOME` caches, Docker images) lands on disk rather than in RAM. The image is cleaned up automatically when the VM exits.
 
 ## Overriding tool packages
 
