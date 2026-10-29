@@ -1,4 +1,4 @@
-{ pkgs, nixpkgs, nixpkgs-rolling, claude-code, codex-cli, copilot-cli, opencode, omp, autolith ? null, pi-coding-agent ? null }:
+{ pkgs, nixpkgs, nixpkgs-rolling, claude-code, codex-cli, copilot-cli, opencode, omp, autolith ? null, pi-coding-agent ? null, shell }:
 
 let
   mkSmokeTest = { name, guestModule, toolBinary }:
@@ -264,6 +264,7 @@ in
 
   docker-smoke = dockerTest;
 }
+// import ./runner.nix { inherit pkgs shell; }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
   autolith-smoke = mkSmokeTest {
     name = "autolith";
