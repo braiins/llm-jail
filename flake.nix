@@ -115,6 +115,7 @@
           autolith = autolith.packages.${system}.default;
           pi-coding-agent = llm-agents.packages.${system}.pi;
           omp = nixpkgs-rolling.legacyPackages.${system}.omp;
+          inherit (self.packages.${system}) shell;
         }
       );
     };
