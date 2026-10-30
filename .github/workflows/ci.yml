@@ -21,5 +21,10 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-
           gc-max-store-size-linux: 1G
 
+      # Ubuntu's AppArmor strips capabilities from unprivileged user
+      # namespaces, which virtiofsd --sandbox=namespace needs
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Run smoke tests
         run: nix flake check --print-build-logs

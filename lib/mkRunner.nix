@@ -465,6 +465,12 @@ pkgs.writeShellApplication {
           exit 1
           ;;
       esac
+      # virtiofsd turns host mount points into guest automounts, which
+      # overlayfs rejects in its lower layer (EREMOTE). A Nix build sandbox
+      # bind-mounts every store path, so the guest couldn't even find its init.
+      if [ "$tag" = "nix-store" ]; then
+        args+=("--no-announce-submounts")
+      fi
       # Logged to a file, not the terminal: the tool's TUI owns the tty
       # once QEMU starts. Printed by cleanup_virtiofsd after the VM exits.
       local log="$RUNDIR/virtiofsd-$tag.log"
