@@ -13,12 +13,6 @@
 # The daemon is NixOS's rootless user unit, run by `user`'s systemd user
 # manager, which lingering starts at boot.
 { pkgs, ... }:
-
-let
-  # Images and layers live on the /nix overlay backing, which is the ext4
-  # store disk under --store-disk (the root tmpfs is only 2G).
-  dataRoot = "/.nix-backing/docker";
-in
 {
   llmjail.extraAllowedDomains = [
     # Docker Hub: registry-1.docker.io and auth.docker.io (subdomains are
@@ -32,7 +26,6 @@ in
 
   virtualisation.docker.rootless = {
     enable = true;
-    daemon.settings.data-root = dataRoot;
   };
   # The module adds docker itself, which includes the compose and buildx CLI
   # plugins; this adds the standalone `docker-compose` command.
@@ -56,7 +49,6 @@ in
   # because it needs root and the remapped uid.
   systemd.services.linger-users = {
     after = [ "llmjail-set-user-uid.service" "llmjail-net-filter.service" ];
-    preStart = "${pkgs.coreutils}/bin/install -d -o user -g users ${dataRoot}";
   };
 
   # user@<uid> reports ready at the user manager's basic.target, before the

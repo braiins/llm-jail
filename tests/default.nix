@@ -1,4 +1,4 @@
-{ pkgs, nixpkgs, nixpkgs-rolling, claude-code, codex-cli, copilot-cli, opencode, omp, autolith ? null, pi-coding-agent ? null }:
+{ pkgs, nixpkgs, nixpkgs-rolling, claude-code, codex-cli, copilot-cli, opencode, omp, autolith ? null, pi-coding-agent ? null, shell }:
 
 let
   mkSmokeTest = { name, guestModule, toolBinary }:
@@ -206,10 +206,6 @@ let
           output = machine.succeed("su - user -c 'echo $DOCKER_HOST'")
           assert output.strip() == "unix:///run/user/1234/docker.sock", f"Unexpected DOCKER_HOST: {output}"
 
-      with subtest("data root is on the /nix overlay backing"):
-          output = machine.succeed("su - user -c 'docker info --format {{.DockerRootDir}}'")
-          assert output.strip() == "/.nix-backing/docker", f"Unexpected data root: {output}"
-
       with subtest("user can run a container"):
           machine.succeed("su - user -c 'docker load < ${dockerTestImage}'")
           output = machine.succeed("su - user -c 'docker run --rm llmjail-test:latest'")
@@ -268,6 +264,7 @@ in
 
   docker-smoke = dockerTest;
 }
+// import ./runner.nix { inherit pkgs shell; }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
   autolith-smoke = mkSmokeTest {
     name = "autolith";
