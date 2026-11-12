@@ -570,7 +570,7 @@ in
 
     documentation.enable = false;
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
-    nix.settings.sandbox = false;
+    nix.settings.sandbox = true;
 
     # Pin nixpkgs within the VM.
     nix.registry.nixpkgs.to = {
